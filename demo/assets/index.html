@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en">
+
+<head>
+  <meta charset="utf-8">
+  <title>{{.App.Name}}</title>
+  <style>
+    :root {
+      color-scheme: dark;
+    }
+
+    body {
+      margin: 0;
+      font: 14px/1.5 system-ui, sans-serif;
+      color: #e8eef7;
+      background: linear-gradient(160deg, #16233a, #0b1120);
+      height: 100vh;
+      overflow: hidden;
+    }
+
+    header {
+      -app-region: drag;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 10px 16px;
+      background: rgba(255, 255, 255, .06);
+    }
+
+    button {
+      font: inherit;
+      color: inherit;
+      background: rgba(255, 255, 255, .12);
+      border: 0;
+      border-radius: 6px;
+      padding: 6px 12px;
+      cursor: pointer;
+      -app-region: no-drag;
+    }
+
+    main {
+      padding: 24px;
+    }
+  </style>
+</head>
+
+<body>
+  <header>
+    <strong>{{.App.Name}}</strong>
+    <span>{{.Width}}x{{.Height}}</span>
+  </header>
+  <main>
+    <p>Counter: <output id="count">0</output></p>
+    <button id="tick">Tick</button>
+  </main>
+  <script>
+    const out = document.getElementById('count');
+    document.getElementById('tick').addEventListener('click', async () => {
+      out.textContent = await window.tick();
+    });
+  </script>
+</body>
+
+</html>
