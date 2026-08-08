@@ -28,6 +28,13 @@ type App struct {
 	// Events renames the page-side events global (default "events").
 	Events string
 
+	// ID is the stable identity used for single-instance mode and autostart.
+	ID string
+
+	// Exec, when set, enables single-instance mode: later launches forward their
+	// arguments to the running instance through it and exit.
+	Exec func(args []string)
+
 	// Name is the application name shown to the OS.
 	Name string
 
@@ -54,6 +61,8 @@ type appSetup struct {
 	Name   string
 	Exit   bool
 	Icon   []byte
+	ID     string
+	Exec   func(args []string)
 	FS     fs.FS
 	HTTP   bool
 	Debug  bool
@@ -65,8 +74,9 @@ type appRuntime struct {
 	cfg     appSetup
 	initErr error
 
-	startOnce sync.Once
-	startErr  error
+	startOnce   sync.Once
+	startErr    error
+	releaseInst func()
 
 	windows  int32
 	exitOnce sync.Once
@@ -78,6 +88,8 @@ func snapshotSetup(a *App) appSetup {
 		Name:   a.Name,
 		Exit:   a.Exit,
 		Icon:   a.Icon,
+		ID:     a.ID,
+		Exec:   a.Exec,
 		FS:     a.FS,
 		HTTP:   a.HTTP,
 		Debug:  a.Debug || debugFromEnv(),
@@ -104,6 +116,12 @@ func (a *App) begin() (*appRuntime, error) {
 
 func (a *App) start(s *appRuntime) error {
 	s.startOnce.Do(func() {
+		release, err := claimPrimaryInstance(&s.cfg)
+		if err != nil {
+			s.startErr = err
+			return
+		}
+		s.releaseInst = release
 		icon := s.cfg.Icon
 		if len(icon) == 0 {
 			icon = embeddedIcon
@@ -126,6 +144,10 @@ func (a *App) Wait() error {
 	}
 	for atomic.LoadInt32(&s.exitFlag) == 0 {
 		pumpUI()
+	}
+	if s.releaseInst != nil {
+		s.releaseInst()
+		s.releaseInst = nil
 	}
 	return nil
 }
