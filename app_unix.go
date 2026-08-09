@@ -217,3 +217,19 @@ func quoteDesktopValue(s string) string {
 	}
 	return s
 }
+
+func openURL(rawurl string) error {
+	return xdgOpen(rawurl)
+}
+
+func revealFile(absPath string) error {
+	return xdgOpen(filepath.Dir(absPath))
+}
+
+func xdgOpen(arg string) error {
+	err := exec.Command("xdg-open", arg).Run()
+	if err != nil {
+		return fmt.Errorf("open: xdg-open %q: %w", arg, err)
+	}
+	return nil
+}

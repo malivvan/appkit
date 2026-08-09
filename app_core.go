@@ -14,6 +14,9 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"net/url"
+	"os"
+	"path/filepath"
 	"sync"
 	"sync/atomic"
 )
@@ -189,4 +192,52 @@ func (a *App) Backend() string {
 		return ""
 	}
 	return platformBackend()
+}
+
+// Open hands rawurl to the OS default handler. Only the http, https, mailto and
+// file schemes are permitted; anything else returns ErrScheme.
+func (a *App) Open(rawurl string) error {
+	if err := checkURLScheme(rawurl); err != nil {
+		return err
+	}
+	if _, err := a.begin(); err != nil {
+		return err
+	}
+	return openURL(rawurl)
+}
+
+// Reveal shows path in the OS file manager (Explorer / Finder / xdg-open).
+func (a *App) Reveal(path string) error {
+	if _, err := a.begin(); err != nil {
+		return err
+	}
+	abs, err := filepath.Abs(path)
+	if err != nil {
+		return fmt.Errorf("appkit: resolve %q: %w", path, err)
+	}
+	if _, err := os.Stat(abs); err != nil {
+		return fmt.Errorf("appkit: reveal %q: %w", path, err)
+	}
+	return revealFile(abs)
+}
+
+// ErrScheme is returned by App.Open for a URL whose scheme is not permitted.
+var ErrScheme = errors.New("appkit: refused URL scheme")
+
+var permittedSchemes = map[string]bool{
+	"http":   true,
+	"https":  true,
+	"mailto": true,
+	"file":   true,
+}
+
+func checkURLScheme(rawurl string) error {
+	u, err := url.Parse(rawurl)
+	if err != nil {
+		return fmt.Errorf("appkit: parse %q: %w", rawurl, err)
+	}
+	if !permittedSchemes[u.Scheme] {
+		return fmt.Errorf("%w: %q (allowed: http, https, mailto, file)", ErrScheme, u.Scheme)
+	}
+	return nil
 }
