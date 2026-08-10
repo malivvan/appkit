@@ -19,6 +19,8 @@ import (
 	"path/filepath"
 	"sync"
 	"sync/atomic"
+
+	"github.com/atotto/clipboard"
 )
 
 // App is the application: declarative configuration plus a lazily-created
@@ -183,6 +185,23 @@ func (s *appRuntime) signalExit() {
 		atomic.StoreInt32(&s.exitFlag, 1)
 		wakeUI()
 	})
+}
+
+// Copy writes b to the system clipboard.
+func (a *App) Copy(b []byte) error {
+	if _, err := a.begin(); err != nil {
+		return err
+	}
+	return clipboard.WriteAll(string(b))
+}
+
+// Paste reads the system clipboard.
+func (a *App) Paste() ([]byte, error) {
+	if _, err := a.begin(); err != nil {
+		return nil, err
+	}
+	s, err := clipboard.ReadAll()
+	return []byte(s), err
 }
 
 // Backend reports the identifier of the loaded engine (for example
