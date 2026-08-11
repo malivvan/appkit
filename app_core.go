@@ -21,6 +21,7 @@ import (
 	"sync/atomic"
 
 	"github.com/atotto/clipboard"
+	"github.com/malivvan/appkit/notify"
 )
 
 // App is the application: declarative configuration plus a lazily-created
@@ -185,6 +186,15 @@ func (s *appRuntime) signalExit() {
 		atomic.StoreInt32(&s.exitFlag, 1)
 		wakeUI()
 	})
+}
+
+// Notify posts a system notification titled with the app's Name.
+func (a *App) Notify(title, message string) error {
+	s, err := a.begin()
+	if err != nil {
+		return err
+	}
+	return notify.Show(s.cfg.Name, title, message)
 }
 
 // Copy writes b to the system clipboard.
