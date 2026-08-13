@@ -6,9 +6,12 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"testing/fstest"
+	"time"
 	"unsafe"
 )
 
@@ -23,6 +26,134 @@ const (
 	testCSSBody = "body{}"
 	testHTML    = "<h1>hi</h1>"
 )
+
+func TestSnapshotConfigCarriesExitIDAndExec(t *testing.T) {
+	call := func([]string) {}
+	got := snapshotSetup(&App{Exit: true, ID: testAppID, Exec: call})
+	if !got.Exit {
+		t.Fatal("snapshot Exit = false, want the committed true")
+	}
+	if got.ID != testAppID {
+		t.Fatalf("snapshot ID = %q, want the committed id", got.ID)
+	}
+	if got.Exec == nil {
+		t.Fatal("snapshot Exec = nil, want the committed callback")
+	}
+	zero := snapshotSetup(&App{})
+	if zero.Exit {
+		t.Fatal("snapshot Exit should default to false")
+	}
+	if zero.ID != "" {
+		t.Fatalf("snapshot ID should default to empty, got %q", zero.ID)
+	}
+	if zero.Exec != nil {
+		t.Fatal("snapshot Exec should default to nil (single-instance mode off)")
+	}
+}
+
+func TestSingleInstanceDisabledWithoutExec(t *testing.T) {
+	for _, cfg := range []*appSetup{
+		{},
+		{ID: testAppID},
+	} {
+		release, err := claimPrimaryInstance(cfg)
+		if err != nil {
+			t.Fatalf("claimPrimaryInstance(%+v): unexpected error %v", cfg, err)
+		}
+		if release == nil {
+			t.Fatalf("claimPrimaryInstance(%+v): nil release", cfg)
+		}
+		release()
+	}
+}
+
+func TestSingleInstanceExecRequiresID(t *testing.T) {
+	release, err := claimPrimaryInstance(&appSetup{Exec: func([]string) {}})
+	if err == nil {
+		t.Fatal("claimPrimaryInstance with Exec set and empty ID: expected error")
+	}
+	if !strings.Contains(err.Error(), "App.ID is required") {
+		t.Fatalf("error = %v, want the ID-required message", err)
+	}
+	if release != nil {
+		t.Fatal("ID-required failure must not return a release")
+	}
+}
+
+func TestSingleInstanceEnabledByExec(t *testing.T) {
+	id := uniqueID("callmode")
+	release, err := claimPrimaryInstance(&appSetup{ID: id, Exec: func([]string) {}})
+	if err != nil {
+		t.Fatalf("claimPrimaryInstance with Exec set: %v", err)
+	}
+	if release == nil {
+		t.Fatal("claimPrimaryInstance with Exec set: nil release")
+	}
+	defer release()
+	if _, err := acquireGuard(id, nil); !errors.Is(err, errInstanceRunning) {
+		t.Fatalf("second acquire under active Exec mode = %v, want errInstanceRunning", err)
+	}
+}
+
+func TestAcquireSendRoundTrip(t *testing.T) {
+	id := uniqueID("roundtrip")
+	got := make(chan []string, 1)
+
+	inst, err := acquireGuard(id, func(args []string) {
+		select {
+		case got <- args:
+		default:
+		}
+	})
+	if err != nil {
+		t.Fatalf("acquireGuard (primary): %v", err)
+	}
+	defer func() { _ = inst.Release() }()
+
+	second, err := acquireGuard(id, nil)
+	if !errors.Is(err, errInstanceRunning) {
+		if second != nil {
+			_ = second.Release()
+		}
+		t.Fatalf("second acquireGuard = %v, want errInstanceRunning", err)
+	}
+
+	want := []string{"open", "/tmp/a b.txt", "café ✓"}
+	if err := signalPeerInstance(id, want); err != nil {
+		t.Fatalf("signalPeerInstance: %v", err)
+	}
+	select {
+	case args := <-got:
+		if !slices.Equal(args, want) {
+			t.Fatalf("forwarded args = %v, want %v", args, want)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("timed out waiting for forwarded args")
+	}
+}
+
+func TestReleaseAllowsReacquire(t *testing.T) {
+	id := uniqueID("reacquire")
+	inst, err := acquireGuard(id, nil)
+	if err != nil {
+		t.Fatalf("first acquireGuard: %v", err)
+	}
+	if err := inst.Release(); err != nil {
+		t.Fatalf("Release: %v", err)
+	}
+	again, err := acquireGuard(id, nil)
+	if err != nil {
+		t.Fatalf("re-acquire after Release: %v", err)
+	}
+	_ = again.Release()
+}
+
+func TestSendWithoutInstance(t *testing.T) {
+	id := uniqueID("noinstance")
+	if err := signalPeerInstance(id, []string{"x"}); err == nil {
+		t.Fatal("signalPeerInstance with no running instance should fail")
+	}
+}
 
 type eventsFakeWV struct {
 	*bindMethodsWebViewStub
@@ -237,6 +368,52 @@ func TestBindBindError(t *testing.T) {
 	}
 	if len(w.bound) != 0 {
 		t.Fatalf("Bind() bound %d names on error, want none", len(w.bound))
+	}
+}
+
+func TestValidateSchemeAllows(t *testing.T) {
+	allowed := []string{
+		"http://example.com",
+		"https://example.com/a?b=c#d",
+		"HTTPS://EXAMPLE.COM",
+		"mailto:someone@example.com",
+		"file:///tmp/report.pdf",
+	}
+	for _, u := range allowed {
+		err := checkURLScheme(u)
+		if err != nil {
+			t.Errorf("validateScheme(%q) = %v, want nil", u, err)
+		}
+	}
+}
+
+func TestValidateSchemeRejects(t *testing.T) {
+	rejected := []string{
+		"",
+		"example.com",
+		"/etc/passwd",
+		"ftp://example.com",
+		"javascript:alert(1)",
+		"vbscript:msgbox(1)",
+		"data:text/html,<h1>x",
+		"smb://host/share",
+	}
+	for _, u := range rejected {
+		err := checkURLScheme(u)
+		if !errors.Is(err, ErrScheme) {
+			t.Errorf("validateScheme(%q) = %v, want ErrScheme", u, err)
+		}
+	}
+}
+
+func TestOpenRejectsBadScheme(t *testing.T) {
+	app := testApp()
+	err := app.Open("javascript:alert(1)")
+	if !errors.Is(err, ErrScheme) {
+		t.Fatalf("testApp().Open(javascript:) = %v, want ErrScheme", err)
+	}
+	if app.scope != nil {
+		t.Fatal("Open opened the app scope for a disallowed scheme")
 	}
 }
 
