@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"sync/atomic"
 	"unsafe"
+
+	"github.com/malivvan/appkit/dialog"
 )
 
 const (
@@ -673,6 +675,30 @@ func (v *View) Maximized() bool {
 		return false
 	}
 	return v.w.Maximized()
+}
+
+// Dialog shows a native file dialog and returns the chosen paths (nil if the
+// user cancelled).
+func (v *View) Dialog(opts dialog.Options) ([]string, error) {
+	if v.w == nil {
+		return nil, notShown()
+	}
+	return v.w.Dialog(opts)
+}
+
+func (w *webview) Dialog(opts dialog.Options) ([]string, error) {
+	ch := make(chan dialogOutcome, 1)
+	w.Dispatch(func() {
+		paths, err := dialog.Open(opts)
+		ch <- dialogOutcome{paths: paths, err: err}
+	})
+	res := <-ch
+	return res.paths, res.err
+}
+
+type dialogOutcome struct {
+	paths []string
+	err   error
 }
 
 func (w *webview) markReady() {
