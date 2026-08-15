@@ -22,6 +22,7 @@ import (
 
 	"github.com/atotto/clipboard"
 	"github.com/malivvan/appkit/notify"
+	"github.com/malivvan/appkit/tray"
 )
 
 // App is the application: declarative configuration plus a lazily-created
@@ -59,6 +60,9 @@ type App struct {
 	// Exit quits the app when its last window closes.
 	Exit bool
 
+	// Tray installs a tray icon and menu for the duration of Wait.
+	Tray *tray.Config
+
 	scopeOnce sync.Once
 	scope     *appRuntime
 }
@@ -66,6 +70,7 @@ type App struct {
 type appSetup struct {
 	Name   string
 	Exit   bool
+	Tray   *tray.Config
 	Icon   []byte
 	ID     string
 	Exec   func(args []string)
@@ -84,6 +89,7 @@ type appRuntime struct {
 	startErr    error
 	releaseInst func()
 
+	trayIcon []byte
 	windows  int32
 	exitOnce sync.Once
 	exitFlag int32
@@ -93,6 +99,7 @@ func snapshotSetup(a *App) appSetup {
 	return appSetup{
 		Name:   a.Name,
 		Exit:   a.Exit,
+		Tray:   a.Tray,
 		Icon:   a.Icon,
 		ID:     a.ID,
 		Exec:   a.Exec,
@@ -133,6 +140,9 @@ func (a *App) start(s *appRuntime) error {
 			icon = embeddedIcon
 		}
 		_ = setAppIcon(icon, s.cfg.Name)
+		if s.cfg.Tray != nil {
+			s.trayIcon = scaleIconPNG(icon, trayIconSize)
+		}
 	})
 	return s.startErr
 }
@@ -147,6 +157,12 @@ func (a *App) Wait() error {
 	}
 	if err := a.start(s); err != nil {
 		return err
+	}
+	if s.cfg.Tray != nil {
+		if err := tray.Set(s.cfg.ID, s.trayIcon, *s.cfg.Tray); err != nil {
+			return fmt.Errorf("appkit: tray: %w", err)
+		}
+		defer tray.Remove()
 	}
 	for atomic.LoadInt32(&s.exitFlag) == 0 {
 		pumpUI()

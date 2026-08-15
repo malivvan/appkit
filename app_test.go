@@ -13,10 +13,24 @@ import (
 	"testing/fstest"
 	"time"
 	"unsafe"
+
+	"github.com/malivvan/appkit/dialog"
+	"github.com/malivvan/appkit/tray"
 )
 
 func uniqueID(name string) string {
 	return fmt.Sprintf("native-instance-test-%s-%d", name, os.Getpid())
+}
+
+func TestSnapshotConfigCarriesTray(t *testing.T) {
+	cfg := &tray.Config{Tooltip: "snapshot-test"}
+	got := snapshotSetup(&App{Name: "snapshot-test", Tray: cfg})
+	if got.Tray != cfg {
+		t.Fatalf("snapshot Tray = %v, want the committed config pointer", got.Tray)
+	}
+	if snapshotSetup(&App{}).Tray != nil {
+		t.Fatal("snapshot Tray should be nil when App.Tray is unset")
+	}
 }
 
 const (
@@ -304,6 +318,8 @@ func (s *bindMethodsWebViewStub) On(string, func(...json.RawMessage)) func() { r
 func (s *bindMethodsWebViewStub) Off(string) {}
 
 func (s *bindMethodsWebViewStub) Emit(string, ...any) error { return nil }
+
+func (s *bindMethodsWebViewStub) Dialog(_ dialog.Options) ([]string, error) { return nil, nil }
 
 type bindMethodsService struct{}
 
