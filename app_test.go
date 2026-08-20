@@ -479,3 +479,77 @@ func TestSortedMapKeys(t *testing.T) {
 		t.Fatalf("sortedMapKeys = %v, want %v", got, want)
 	}
 }
+
+func TestAutostartSlug(t *testing.T) {
+	cases := map[string]string{
+		"My App":      "my-app",
+		"My  App":     "my--app",
+		"my.app_v1-x": "my.app_v1-x",
+		"Über-App":    "ber-app",
+		"  App  ":     "app",
+		"???":         defaultAutostartSlug,
+		"UPPER":       "upper",
+		"":            defaultAutostartSlug,
+	}
+	for in, want := range cases {
+		if got := slugifyAutostart(in); got != want {
+			t.Errorf("autostartSlug(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestValidateAutostartIdentifier(t *testing.T) {
+	good := []string{testAppID, "my-app_1.0", "x"}
+	for _, id := range good {
+		if err := validateAutostartLabel(id); err != nil {
+			t.Errorf("validateAutostartIdentifier(%q) = %v, want nil", id, err)
+		}
+	}
+	bad := []string{"has space", "has/slash", "emoji😀", strings.Repeat("a", 201)}
+	for _, id := range bad {
+		if err := validateAutostartLabel(id); err == nil {
+			t.Errorf("validateAutostartIdentifier(%q) = nil, want error", id)
+		}
+	}
+}
+
+func TestAutostartIdentifier(t *testing.T) {
+	cases := []struct {
+		name string
+		cfg  appSetup
+		want string
+	}{
+		{"id wins", appSetup{ID: testAppID, Name: testAppName}, testAppID},
+		{"name slug", appSetup{Name: testAppName}, "my-app"},
+		{"name slug strips non-ascii", appSetup{Name: "Über App"}, "ber-app"},
+	}
+	for _, tc := range cases {
+		got, err := autostartLabel(tc.cfg)
+		if err != nil || got != tc.want {
+			t.Errorf("%s: autostartIdentifier(%+v) = %q, %v; want %q", tc.name, tc.cfg, got, err, tc.want)
+		}
+	}
+	if _, err := autostartLabel(appSetup{ID: "bad id"}); err == nil {
+		t.Error("autostartIdentifier with an invalid App.ID = nil error, want error")
+	}
+	id, err := autostartLabel(appSetup{})
+	if err != nil || id == "" {
+		t.Fatalf("autostartIdentifier(empty cfg) = %q, %v; want a non-empty slug", id, err)
+	}
+}
+
+func TestAutostartNilSafety(t *testing.T) {
+	var a *Autostart
+	if a.Enabled() {
+		t.Error("nil Autostart: Enabled = true")
+	}
+	if a.Path() != "" || a.Backend() != "" {
+		t.Errorf("nil Autostart: Path = %q, Backend = %q, want empty", a.Path(), a.Backend())
+	}
+	if err := a.Enable("--flag"); err == nil {
+		t.Error("nil Autostart: Enable = nil, want ErrAutostartNotSupported")
+	}
+	if err := a.Disable(); err == nil {
+		t.Error("nil Autostart: Disable = nil, want ErrAutostartNotSupported")
+	}
+}
