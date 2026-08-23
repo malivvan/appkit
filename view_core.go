@@ -602,6 +602,7 @@ func (a *App) showInitialView(view *View) error {
 		atomic.AddInt32(&s.windows, 1)
 	}
 	w.onReady = view.Ready
+	a.addView(view)
 	if view.URL != "" {
 		w.Navigate(view.URL)
 	}
@@ -634,9 +635,13 @@ func (v *View) Close() {
 	if v.w == nil {
 		return
 	}
+	app := v.app
 	v.w.Close()
 	v.w = nil
 	v.app = nil
+	if app != nil {
+		app.removeView(v)
+	}
 }
 
 // Eval executes js in the page.

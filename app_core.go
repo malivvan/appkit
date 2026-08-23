@@ -93,6 +93,9 @@ type appRuntime struct {
 	windows  int32
 	exitOnce sync.Once
 	exitFlag int32
+
+	viewsMu sync.Mutex
+	views   map[*View]bool
 }
 
 func snapshotSetup(a *App) appSetup {
@@ -202,6 +205,35 @@ func (s *appRuntime) signalExit() {
 		atomic.StoreInt32(&s.exitFlag, 1)
 		wakeUI()
 	})
+}
+
+func (a *App) addView(v *View) {
+	if a == nil || v == nil {
+		return
+	}
+	s := a.scope
+	if s == nil {
+		return
+	}
+	s.viewsMu.Lock()
+	if s.views == nil {
+		s.views = make(map[*View]bool)
+	}
+	s.views[v] = true
+	s.viewsMu.Unlock()
+}
+
+func (a *App) removeView(v *View) {
+	if a == nil || v == nil {
+		return
+	}
+	s := a.scope
+	if s == nil {
+		return
+	}
+	s.viewsMu.Lock()
+	delete(s.views, v)
+	s.viewsMu.Unlock()
 }
 
 // Notify posts a system notification titled with the app's Name.
