@@ -473,6 +473,54 @@ func TestServeAppFSMapping(t *testing.T) {
 	}
 }
 
+func TestServeAppFSRendersHTMLTemplates(t *testing.T) {
+	app := &App{Name: "templated", Exit: true}
+	view := &View{URL: "app://app/page.html", Width: 800, Height: 600}
+	view.app = app
+	if view.App() != app {
+		t.Fatalf("View.App() = %v, want the managing app", view.App())
+	}
+	if got := (&View{}).App(); got != nil {
+		t.Fatalf("unshown View.App() = %v, want nil", got)
+	}
+	if got := (*View)(nil).App(); got != nil {
+		t.Fatalf("nil View.App() = %v, want nil", got)
+	}
+	const rawHTML = `<script>const t = "{{literal}}";</script>`
+	serve := fsContentFunc(fsys(map[string]string{
+		"page.html": `<h1>{{.App.Name}}</h1><p>{{.URL}} {{.Width}}x{{.Height}} {{.App.Exit}}</p>`,
+		"raw.html":  rawHTML,
+		"note.txt":  "{{.App.Name}}",
+	}), view)
+	req := &contentRequest{URL: "app://app/page.html"}
+	resp := serve(req)
+	if resp == nil {
+		t.Fatal("page.html served nothing")
+	}
+	if want := "<h1>templated</h1><p>app://app/page.html 800x600 true</p>"; string(resp.Body) != want {
+		t.Fatalf("rendered page.html = %q, want %q", resp.Body, want)
+	}
+	if resp.MIME != "text/html; charset=utf-8" {
+		t.Fatalf("rendered page.html MIME = %q, want text/html", resp.MIME)
+	}
+	if req.View != view {
+		t.Fatalf("request.View = %v, want the served view", req.View)
+	}
+	if resp := serve(&contentRequest{URL: "app://app/raw.html"}); resp == nil || string(resp.Body) != rawHTML {
+		t.Fatalf("raw.html = %+v, want it served verbatim", resp)
+	}
+	if resp := serve(&contentRequest{URL: "app://app/note.txt"}); resp == nil || string(resp.Body) != "{{.App.Name}}" {
+		t.Fatalf("note.txt = %+v, want it served verbatim (not HTML)", resp)
+	}
+	// html/template must escape View data: a name carrying markup can never be
+	// injected into the served page (guards against a text/template regression).
+	app.Name = `<b>&"x"</b>`
+	esc := serve(&contentRequest{URL: "app://app/page.html"})
+	if esc == nil || strings.Contains(string(esc.Body), "<b>") || !strings.Contains(string(esc.Body), "&lt;b&gt;") {
+		t.Fatalf("rendered page.html = %q, want App.Name HTML-escaped", esc.Body)
+	}
+}
+
 func TestSortedMapKeys(t *testing.T) {
 	m := map[string]int{"b": 2, "a": 1, "c": 3}
 	if got, want := sortedKeys(m), []string{"a", "b", "c"}; len(got) != 3 || got[0] != want[0] || got[1] != want[1] || got[2] != want[2] {

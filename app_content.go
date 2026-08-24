@@ -1,7 +1,9 @@
 package appkit
 
 import (
+	"bytes"
 	"fmt"
+	"html/template"
 	"io/fs"
 	"net/url"
 	"path"
@@ -57,7 +59,21 @@ func fsContentFunc(root fs.FS, view *View) contentFunc {
 		if r.View == nil {
 			r.View = view
 		}
+		if isHTMLFile(name) {
+			if rendered, ok := renderTemplate(view, name, data); ok {
+				data = rendered
+			}
+		}
 		return &contentResponse{Body: data, MIME: contentTypeByName(name)}
+	}
+}
+
+func isHTMLFile(name string) bool {
+	switch strings.ToLower(path.Ext(name)) {
+	case ".html", ".htm":
+		return true
+	default:
+		return false
 	}
 }
 
@@ -94,6 +110,26 @@ func resolveAppURL(base, raw string) string {
 	}
 	out := base + u.Path
 	return out
+}
+
+// renderTemplate executes an HTML page from App.FS as a template with the
+// requesting View as its data. It uses html/template (never text/template) so
+// contextual auto-escaping applies to every action: a page can never emit
+// markup out of View data that was not meant as markup. A parse or execute
+// failure reports ok=false, and the caller serves the original bytes verbatim.
+func renderTemplate(view *View, name string, data []byte) (rendered []byte, ok bool) {
+	if view == nil {
+		return nil, false
+	}
+	tmpl, err := template.New(name).Parse(string(data))
+	if err != nil {
+		return nil, false
+	}
+	var buf bytes.Buffer
+	if err := tmpl.Execute(&buf, view); err != nil {
+		return nil, false
+	}
+	return buf.Bytes(), true
 }
 
 func invokeContentFunc(serve contentFunc, req *contentRequest) (resp *contentResponse) {
