@@ -44,7 +44,7 @@ func signalPeerInstance(id string, args []string) error { return sendInstanceMes
 // forwards its arguments to the running instance and exits. Passing
 // --new-instance skips the check entirely.
 func claimPrimaryInstance(opts *appSetup) (func(), error) {
-	if opts.Exec == nil {
+	if opts.Exec == nil || wantsNewInstance(os.Args) {
 		return func() {}, nil
 	}
 	id := opts.ID
@@ -67,6 +67,15 @@ func claimPrimaryInstance(opts *appSetup) (func(), error) {
 		markPrimaryInstance(false)
 		_ = inst.Release()
 	}, nil
+}
+
+func wantsNewInstance(args []string) bool {
+	for _, a := range args {
+		if a == "--new-instance" {
+			return true
+		}
+	}
+	return false
 }
 
 func isPrimaryInstance() bool {
