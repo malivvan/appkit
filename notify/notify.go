@@ -77,3 +77,20 @@ func ShowOpts(name, title, message string, opts Options) error {
 	}
 	return show(name, title, message, opts)
 }
+
+// Alert posts a critical notification and follows it with the alert sound.
+func Alert(name, title, message string, opts Options) error {
+	if err := opts.validate(); err != nil {
+		return err
+	}
+	opts.Urgency = UrgencyCritical
+	if err := show(name, title, message, opts); err != nil {
+		return err
+	}
+	return alertSound()
+}
+
+// Beep plays a tone of freq Hz for duration ms.
+func Beep(freq float64, duration int) error {
+	return beep(freq, duration)
+}

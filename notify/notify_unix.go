@@ -13,6 +13,9 @@ import (
 	"path/filepath"
 	"strconv"
 	"sync"
+	"syscall"
+	"time"
+	"unsafe"
 
 	"github.com/godbus/dbus/v5"
 )
@@ -22,6 +25,11 @@ const (
 	notifPath      = "/org/freedesktop/Notifications"
 
 	kdialogPopupSeconds = 5
+)
+
+const (
+	evSnd   = 0x12
+	sndTone = 0x02
 )
 
 var (
@@ -37,6 +45,13 @@ type iconPayload struct {
 	BitsPerSample int32
 	Channels      int32
 	Data          []byte
+}
+
+type keyboardEvent struct {
+	Time  syscall.Timeval
+	Type  uint16
+	Code  uint16
+	Value int32
 }
 
 func sessionBus() (*dbus.Conn, error) {
@@ -230,4 +245,46 @@ func urgencyLabel(level int) string {
 	default:
 		return "normal"
 	}
+}
+
+func beep(freq float64, duration int) error {
+	if freq == 0 {
+		freq = DefaultFreq
+	} else if freq > 20000 {
+		freq = 20000
+	} else if freq < 0 {
+		freq = DefaultFreq
+	}
+	if duration == 0 {
+		duration = DefaultDuration
+	}
+
+	f, err := os.OpenFile("/dev/input/by-path/platform-pcspkr-event-spkr", os.O_WRONLY, 0644)
+	if err != nil {
+		if _, err := os.Stdout.Write([]byte{7}); err != nil {
+			return fmt.Errorf("notify: beep: write bell to stdout: %w", err)
+		}
+		return nil
+	}
+	defer func() { _ = f.Close() }()
+
+	ev := keyboardEvent{Type: evSnd, Code: sndTone, Value: int32(freq)}
+	raw := *(*[unsafe.Sizeof(ev)]byte)(unsafe.Pointer(&ev))
+
+	if _, err := f.Write(raw[:]); err != nil {
+		return fmt.Errorf("notify: beep: write tone start to pcspkr: %w", err)
+	}
+
+	time.Sleep(time.Duration(duration) * time.Millisecond)
+
+	ev.Value = 0
+	raw = *(*[unsafe.Sizeof(ev)]byte)(unsafe.Pointer(&ev))
+	if _, err := f.Write(raw[:]); err != nil {
+		return fmt.Errorf("notify: beep: write tone stop to pcspkr: %w", err)
+	}
+	return nil
+}
+
+func alertSound() error {
+	return beep(DefaultFreq, DefaultDuration)
 }
