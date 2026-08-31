@@ -246,6 +246,149 @@ func wireEvents(t *testing.T, f *eventsFakeWV) *events {
 	return e
 }
 
+func TestInstallEventsWiresBridge(t *testing.T) {
+	f := newEventsFakeWV()
+	wireEvents(t, f)
+	if len(f.initJS) != 1 || !strings.Contains(f.initJS[0], "window.events") {
+		t.Fatalf("events JS not injected via Init: %q", f.initJS)
+	}
+	_, ok := f.bound[eventsBindName]
+	if !ok {
+		t.Fatalf("bridge %q not bound; bound names: %v", eventsBindName, keysOf(f.bound))
+	}
+}
+
+func TestEventsAPICustomGlobal(t *testing.T) {
+	f := newEventsFakeWV()
+	e, err := installEvents(f, "acme")
+	if err != nil {
+		t.Fatalf("install events: %v", err)
+	}
+	f.ev = e
+	if len(f.initJS) != 1 {
+		t.Fatalf("init scripts = %d, want 1", len(f.initJS))
+	}
+	js := f.initJS[0]
+	if !strings.Contains(js, "window.acme") {
+		t.Fatalf("events JS does not install window.acme: %q", js)
+	}
+	if strings.Contains(js, ".events") {
+		t.Fatalf("events JS still nests a .events member: %q", js)
+	}
+	if err := f.Emit("ping", "pong"); err != nil {
+		t.Fatalf("Emit: %v", err)
+	}
+	ev := f.lastEval()
+	if !strings.Contains(ev, "window.acme;if(g&&g._dispatch){g._dispatch(\"ping\"") {
+		t.Fatalf("Eval does not reach the acme global's _dispatch: %q", ev)
+	}
+}
+
+func TestEmitFiresGoHandlerAndEvalsJS(t *testing.T) {
+	f := newEventsFakeWV()
+	wireEvents(t, f)
+
+	var got []json.RawMessage
+	f.On("greet", func(args ...json.RawMessage) { got = args })
+
+	err := f.Emit("greet", map[string]any{"name": "crg"}, 42)
+	if err != nil {
+		t.Fatalf("Emit: %v", err)
+	}
+
+	if len(got) != 2 {
+		t.Fatalf("handler received %d args, want 2", len(got))
+	}
+	var payload struct {
+		Name string `json:"name"`
+	}
+	err = json.Unmarshal(got[0], &payload)
+	if err != nil || payload.Name != "crg" {
+		t.Fatalf("arg 0 = %s (err %v), want {name:crg}", got[0], err)
+	}
+	if string(got[1]) != "42" {
+		t.Fatalf("arg 1 = %s, want 42", got[1])
+	}
+
+	js := f.lastEval()
+	if !strings.Contains(js, `_dispatch("greet"`) {
+		t.Fatalf("Eval did not dispatch the event: %q", js)
+	}
+	if !strings.Contains(js, `"name":"crg"`) || !strings.Contains(js, "42") {
+		t.Fatalf("Eval missing the payload: %q", js)
+	}
+}
+
+func TestReceiveFromJSDispatchesToGo(t *testing.T) {
+	f := newEventsFakeWV()
+	wireEvents(t, f)
+
+	var got []json.RawMessage
+	f.On("ui:click", func(args ...json.RawMessage) { got = args })
+
+	bridge, ok := f.bound[eventsBindName].(func(string, []json.RawMessage))
+	if !ok {
+		t.Fatalf("bound bridge has unexpected type %T", f.bound[eventsBindName])
+	}
+	bridge("ui:click", []json.RawMessage{json.RawMessage(`"save"`)})
+
+	if len(got) != 1 || string(got[0]) != `"save"` {
+		t.Fatalf("Go handler received %v, want [\"save\"]", got)
+	}
+}
+
+func TestOnCancelStopsHandler(t *testing.T) {
+	f := newEventsFakeWV()
+	wireEvents(t, f)
+
+	n := 0
+	cancel := f.On("tick", func(args ...json.RawMessage) { n++ })
+
+	_ = f.Emit("tick")
+	cancel()
+	_ = f.Emit("tick")
+
+	if n != 1 {
+		t.Fatalf("handler fired %d times, want 1 (cancelled after first emit)", n)
+	}
+}
+
+func TestOffRemovesAllHandlers(t *testing.T) {
+	f := newEventsFakeWV()
+	wireEvents(t, f)
+
+	n := 0
+	f.On("x", func(args ...json.RawMessage) { n++ })
+	f.On("x", func(args ...json.RawMessage) { n++ })
+
+	_ = f.Emit("x")
+	if n != 2 {
+		t.Fatalf("both handlers should fire: got %d, want 2", n)
+	}
+
+	f.Off("x")
+	_ = f.Emit("x")
+	if n != 2 {
+		t.Fatalf("no handler should fire after Off: got %d, want 2", n)
+	}
+}
+
+func TestEmitRejectsUnencodableData(t *testing.T) {
+	f := newEventsFakeWV()
+	wireEvents(t, f)
+
+	fired := false
+	f.On("bad", func(args ...json.RawMessage) { fired = true })
+
+	err := f.Emit("bad", make(chan int))
+	if err == nil {
+		t.Fatal("Emit should fail to encode a channel")
+	}
+	if fired {
+		t.Fatal("no handler should fire when encoding fails")
+	}
+}
+
 func keysOf(m map[string]any) []string {
 	out := make([]string, 0, len(m))
 	for k := range m {
@@ -518,6 +661,73 @@ func TestServeAppFSRendersHTMLTemplates(t *testing.T) {
 	esc := serve(&contentRequest{URL: "app://app/page.html"})
 	if esc == nil || strings.Contains(string(esc.Body), "<b>") || !strings.Contains(string(esc.Body), "&lt;b&gt;") {
 		t.Fatalf("rendered page.html = %q, want App.Name HTML-escaped", esc.Body)
+	}
+}
+
+func TestEmitWithoutBridge(t *testing.T) {
+	w := &webview{}
+	if err := w.Emit("x"); err == nil {
+		t.Fatal("Emit on a view without the events bridge should error")
+	}
+	if cancel := w.On("x", func(args ...json.RawMessage) {}); cancel == nil {
+		t.Fatal("On without the bridge should still return a cancel func")
+	}
+	w.Off("x")
+}
+
+func TestApplyBindsDeterministicOrderAndOverride(t *testing.T) {
+	appBinds := map[string]any{
+		"zeta":  func() {},
+		"alpha": func() {},
+		"ghost": nil,
+		"mid":   func() {},
+	}
+	viewBinds := map[string]any{
+		"beta":  func() {},
+		"mid":   nil,
+		"alpha": func() {},
+	}
+	s := &bindMethodsWebViewStub{}
+	if err := applyBindings(s, appBinds, viewBinds); err != nil {
+		t.Fatalf("applyBinds: %v", err)
+	}
+	wantOrder := []string{"alpha", "mid", "zeta", "alpha", "beta"}
+	if len(s.bindOrder) != len(wantOrder) {
+		t.Fatalf("bind order = %v, want %v", s.bindOrder, wantOrder)
+	}
+	for i, name := range wantOrder {
+		if s.bindOrder[i] != name {
+			t.Fatalf("bind order = %v, want %v", s.bindOrder, wantOrder)
+		}
+	}
+	if len(s.unbindCall) != 1 || s.unbindCall[0] != "mid" {
+		t.Fatalf("unbind calls = %v, want [mid]", s.unbindCall)
+	}
+	wantBound := []string{"alpha", "beta", "zeta"}
+	got := keysOf(s.bound)
+	if len(got) != len(wantBound) {
+		t.Fatalf("bound names = %v, want %v", got, wantBound)
+	}
+	for _, n := range wantBound {
+		if _, ok := s.bound[n]; !ok {
+			t.Errorf("name %q should be bound; bound: %v", n, got)
+		}
+	}
+	if _, ok := s.bound["mid"]; ok {
+		t.Error(`"mid" must be unbound by the nil view entry`)
+	}
+	if _, ok := s.bound["ghost"]; ok {
+		t.Error(`"ghost" (nil app entry) must not be bound`)
+	}
+}
+
+func TestApplyBindsNilViewEntryWithoutAppBindingIsNoop(t *testing.T) {
+	s := &bindMethodsWebViewStub{}
+	if err := applyBindings(s, map[string]any{"a": func() {}}, map[string]any{"missing": nil}); err != nil {
+		t.Fatalf("applyBinds: %v", err)
+	}
+	if len(s.unbindCall) != 0 {
+		t.Fatalf("unbind calls = %v, want none", s.unbindCall)
 	}
 }
 
