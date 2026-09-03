@@ -5,12 +5,15 @@ import (
 	"errors"
 	"fmt"
 	"runtime"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"unsafe"
 
 	"github.com/ebitengine/purego"
 	"github.com/ebitengine/purego/objc"
+
+	"github.com/malivvan/appkit/dialog"
 )
 
 const (
@@ -275,6 +278,10 @@ func registerAppClasses() error {
 		[]*objc.Protocol{objc.GetProtocol("WKUIDelegate")}, nil,
 		[]objc.MethodDef{
 			{
+				Cmd: selector("webView:runOpenPanelWithParameters:initiatedByFrame:completionHandler:"),
+				Fn:  runOpenPanel,
+			},
+			{
 				Cmd: selector("webView:requestMediaCapturePermissionForOrigin:initiatedByFrame:type:decisionHandler:"),
 				Fn:  mediaCapturePermission,
 			},
@@ -502,6 +509,71 @@ func startURLSchemeTask(self objc.ID, _cmd objc.SEL, webView objc.ID, task objc.
 }
 
 func stopURLSchemeTask(self objc.ID, _cmd objc.SEL, webView objc.ID, task objc.ID) {}
+
+func runOpenPanel(self objc.ID, _cmd objc.SEL, webView, parameters, frame, completionHandler objc.ID) {
+	autorelease(func() {
+		allowsMultiple := parameters.Send(selector("allowsMultipleSelection")) != 0
+		allowsDirs := parameters.Send(selector("allowsDirectories")) != 0
+
+		panel := objcClass("NSOpenPanel").Send(selector("openPanel"))
+		configureOpenPanel(panel, true, allowsDirs, allowsMultiple, dialog.Options{})
+
+		var urls objc.ID
+		if int(panel.Send(selector("runModal"))) == nsModalResponseOK {
+			urls = panel.Send(selector("URLs"))
+		}
+		invokeOpenPanelCompletion(completionHandler, urls)
+	})
+}
+
+func configureOpenPanel(panel objc.ID, canFiles, canDirs, multiple bool, opts dialog.Options) {
+	panel.Send(selector("setCanChooseFiles:"), canFiles)
+	panel.Send(selector("setCanChooseDirectories:"), canDirs)
+	panel.Send(selector("setAllowsMultipleSelection:"), multiple)
+	if opts.Title != "" {
+		panel.Send(selector("setMessage:"), nsString(opts.Title))
+	}
+	if opts.Directory != "" {
+		url := objcClass("NSURL").Send(selector("fileURLWithPath:"), nsString(opts.Directory))
+		panel.Send(selector("setDirectoryURL:"), url)
+	}
+	types := openPanelTypes(opts)
+	if types != 0 {
+		panel.Send(selector("setAllowedFileTypes:"), types)
+	}
+}
+
+func openPanelTypes(opts dialog.Options) objc.ID {
+	var exts []string
+	for _, f := range opts.Filters {
+		exts = append(exts, f.Extensions...)
+	}
+	exts = append(exts, opts.Extensions...)
+	var clean []string
+	for _, e := range exts {
+		e = strings.TrimPrefix(e, ".")
+		if e == "" || e == "*" {
+			return 0
+		}
+		clean = append(clean, e)
+	}
+	if len(clean) == 0 {
+		return 0
+	}
+	arr := objcClass("NSMutableArray").Send(selector("array"))
+	for _, e := range clean {
+		arr.Send(selector("addObject:"), nsString(e))
+	}
+	return arr
+}
+
+func invokeOpenPanelCompletion(completionHandler, urls objc.ID) {
+	sig := objcClass("NSMethodSignature").Send(selector("signatureWithObjCTypes:"), "v@?@")
+	inv := objcClass("NSInvocation").Send(selector("invocationWithMethodSignature:"), sig)
+	inv.Send(selector("setTarget:"), completionHandler)
+	inv.Send(selector("setArgument:atIndex:"), unsafe.Pointer(&urls), 1)
+	inv.Send(selector("invoke"))
+}
 
 func mediaCapturePermission(self objc.ID, _cmd objc.SEL, webView, origin, frame objc.ID, captureType int, decisionHandler objc.ID) {
 	autorelease(func() {
