@@ -95,6 +95,16 @@ func contentTypeByName(name string) string {
 		return "image/png"
 	case ".jpg", ".jpeg":
 		return "image/jpeg"
+	case ".gif":
+		return "image/gif"
+	case ".ico":
+		return "image/x-icon"
+	case ".woff":
+		return "font/woff"
+	case ".woff2":
+		return "font/woff2"
+	case ".wasm":
+		return "application/wasm"
 	default:
 		return "application/octet-stream"
 	}
