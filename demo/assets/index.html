@@ -1,64 +1,205 @@
 <!doctype html>
 <html lang="en">
-
 <head>
   <meta charset="utf-8">
-  <title>{{.App.Name}}</title>
-  <style>
-    :root {
-      color-scheme: dark;
-    }
-
-    body {
-      margin: 0;
-      font: 14px/1.5 system-ui, sans-serif;
-      color: #e8eef7;
-      background: linear-gradient(160deg, #16233a, #0b1120);
-      height: 100vh;
-      overflow: hidden;
-    }
-
-    header {
-      -app-region: drag;
-      display: flex;
-      align-items: center;
-      gap: 12px;
-      padding: 10px 16px;
-      background: rgba(255, 255, 255, .06);
-    }
-
-    button {
-      font: inherit;
-      color: inherit;
-      background: rgba(255, 255, 255, .12);
-      border: 0;
-      border-radius: 6px;
-      padding: 6px 12px;
-      cursor: pointer;
-      -app-region: no-drag;
-    }
-
-    main {
-      padding: 24px;
-    }
-  </style>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>appkit demo</title>
+  <link rel="stylesheet" href="app.css">
 </head>
-
 <body>
-  <header>
-    <strong>{{.App.Name}}</strong>
-    <span>{{.Width}}x{{.Height}}</span>
+  <!--
+    Custom window chrome. appkit windows are always frameless, so the OS frame
+    is gone on every platform and this bar IS the chrome: drag it (via the
+    -app-region: drag attribute), minimize / maximize / close with the buttons
+    on the right. Because the frame is rendered by the page itself the window
+    looks (almost) identical on macOS, Windows and Linux - which is also what
+    makes this app a stable UI-automation target.
+  -->
+  <header id="titlebar">
+    <span class="tb-brand">appkit! <span class="tb-brand-dim">demo</span></span>
+    <span class="tb-spacer"></span>
+    <button id="btnMinimize" class="tb-dot" title="Minimize window">&#x2013;</button>
+    <button id="btnMaximize" class="tb-dot" title="Maximize window">&#x25A1;</button>
+    <button id="btnClose" class="tb-dot tb-close" title="Close app">&#x2715;</button>
   </header>
-  <main>
-    <p>Counter: <output id="count">0</output></p>
-    <button id="tick">Tick</button>
-  </main>
-  <script>
-    const out = document.getElementById('count');
-    document.getElementById('tick').addEventListener('click', async () => {
-      out.textContent = await window.tick();
-    });
-  </script>
-</body>
 
+  <div class="layout">
+    <nav id="nav" aria-label="Sections">
+      <a class="nav-item" href="#overview" data-section="overview">Overview</a>
+      <a class="nav-item" href="#bind" data-section="bind">Bind</a>
+      <a class="nav-item" href="#events" data-section="events">Events</a>
+      <a class="nav-item" href="#clipboard" data-section="clipboard">Clipboard</a>
+      <a class="nav-item" href="#dialogs" data-section="dialogs">Dialogs</a>
+      <a class="nav-item" href="#notify" data-section="notify">Notify</a>
+      <a class="nav-item" href="#autostart" data-section="autostart">Autostart</a>
+      <a class="nav-item" href="#files" data-section="files">Open / Reveal</a>
+      <a class="nav-item" href="#selftest" data-section="selftest">Self test</a>
+    </nav>
+
+    <main id="content" class="content">
+      <section id="section-overview" class="card">
+        <h1>One demo app for the whole package</h1>
+        <p class="muted">
+          This window shows every appkit feature behind a single, borderless,
+          cross-platform UI. Pick a section on the left - or read on.
+        </p>
+        <ul class="muted">
+          <li>Custom chrome: this bar is drawn by the page and dragged with <code>-app-region</code>.</li>
+          <li>Under the hood: the page is the embedded UI served from <code>App.FS</code> at the uniform <code>app://</code> origin on every platform.</li>
+        </ul>
+      </section>
+
+      <section id="section-bind" class="card" hidden>
+        <h1>Bind - Go values, callable and readable from JS</h1>
+        <p class="muted small">
+          One entry, one dotted name: a Go <strong>function</strong> is
+          callable - a zero-argument one also reads as a value
+          (<code>await demo.clock</code>), a one-argument one also accepts
+          assignment (<code>demo.mark = value</code>); a
+          <strong>[2]any{getter, setter}</strong> pair is a value whose state
+          stays in Go - readable and writable (<code>demo.theme</code>), while
+          a lone getter (<code>demo.counter</code>) or lone setter
+          (<code>demo.setp</code>) binds read-only / write-only; any other
+          JSON-encodable value is an immutable, frozen
+          <strong>constant</strong> (<code>demo.meta</code>).
+        </p>
+        <div class="row">
+          <input id="bindA" type="number" value="20">
+          <span>+</span>
+          <input id="bindB" type="number" value="22">
+          <button id="bindAdd" class="primary">add</button>
+          <span class="out" id="bindResult">-</span>
+        </div>
+        <div class="row">
+          <input id="bindText" type="text" value="world">
+          <button id="bindEcho" class="primary">echo</button>
+          <span class="out" id="bindEchoResult">-</span>
+        </div>
+        <div class="row">
+          <button id="bindMetaRead" class="secondary">read window.demo.meta</button>
+          <span class="out" id="bindMetaResult">-</span>
+        </div>
+        <div class="row">
+          <button id="bindClockCall" class="secondary">call demo.clock()</button>
+          <button id="bindClockRead" class="secondary">await demo.clock</button>
+          <span class="out" id="bindClockResult">-</span>
+        </div>
+        <div class="row">
+          <input id="bindTheme" type="text" value="ocean">
+          <button id="bindThemeRead" class="secondary">await demo.theme</button>
+          <button id="bindThemeWrite" class="primary">demo.theme = value</button>
+          <span class="out" id="bindThemeResult">-</span>
+        </div>
+        <div class="row">
+          <input id="bindMarkInput" type="text" value="hi">
+          <button id="bindMarkCall" class="secondary">call demo.mark(value)</button>
+          <button id="bindMarkSet" class="primary">demo.mark = value</button>
+          <span class="out" id="bindMarkResult">-</span>
+        </div>
+        <div class="row">
+          <button id="bindCounterRead" class="secondary">await demo.counter (getter)</button>
+          <span class="out" id="bindCounterResult">-</span>
+        </div>
+        <div class="row">
+          <input id="bindPair" type="text" value="pair">
+          <button id="bindPairRead" class="secondary">await demo.pair</button>
+          <button id="bindPairWrite" class="primary">demo.pair = value</button>
+          <span class="out" id="bindPairResult">-</span>
+        </div>
+        <div class="row">
+          <input id="bindSetp" type="number" value="0">
+          <button id="bindSetpWrite" class="secondary">demo.setp = value (setter)</button>
+          <button id="bindSetpState" class="secondary">await demo.setpState</button>
+          <span class="out" id="bindSetpResult">-</span>
+        </div>
+      </section>
+
+      <section id="section-events" class="card" hidden>
+        <h1>Events - publish/subscribe across Go and JS</h1>
+        <div class="row">
+          <button id="evGo" class="secondary">Go → JS (emit from Go)</button>
+          <button id="evJS" class="secondary">JS → Go → JS round trip</button>
+          <span class="out" id="evResult">-</span>
+        </div>
+      </section>
+
+      <section id="section-clipboard" class="card" hidden>
+        <h1>Clipboard - App.Copy / App.Paste</h1>
+        <div class="row">
+          <button id="clipCopy" class="secondary">copy a text</button>
+          <button id="clipPaste" class="primary">paste</button>
+          <span class="out" id="clipResult">-</span>
+        </div>
+      </section>
+
+      <section id="section-dialogs" class="card" hidden>
+        <h1>Dialogs - native panels via the View</h1>
+        <div class="row">
+          <button id="dlgOpen" class="secondary">Open file…</button>
+          <button id="dlgSave" class="secondary">Save as…</button>
+          <button id="dlgDir" class="secondary">Pick directory…</button>
+          <span class="out" id="dlgResult">-</span>
+        </div>
+      </section>
+
+      <section id="section-notify" class="card" hidden>
+        <h1>Notify - OS-level notification</h1>
+        <div class="row">
+          <button id="notifyGo" class="secondary">Send notification</button>
+          <span class="out" id="notifyResult">-</span>
+        </div>
+      </section>
+
+      <section id="section-autostart" class="card" hidden>
+        <h1>Autostart - launch at login (App.Autostart)</h1>
+        <div class="row">
+          <button id="auEnable" class="primary">Enable at login</button>
+          <button id="auDisable" class="secondary">Disable</button>
+          <span class="out" id="auResult">-</span>
+        </div>
+        <div class="row">
+          <label for="auArgs">Arguments at login</label>
+          <input id="auArgs" type="text" value="" placeholder="e.g. --hidden">
+        </div>
+        <p class="muted small">
+          Registers this demo binary to start with your user session. The
+          registration identifier comes from <code>App.Name</code>
+          (<code>App.ID</code> when set); <code>Enabled</code> /
+          <code>Path</code> / <code>Backend</code> report the current
+          registration (per platform: XDG <code>.desktop</code> file,
+          Windows <code>Run</code> registry value, macOS LaunchAgent /
+          SMAppService). Takes effect at the next login. The self test
+          enables and disables it again, leaving no registration behind.
+        </p>
+      </section>
+
+      <section id="section-files" class="card" hidden>
+        <h1>Open / Reveal - App.Open and App.Reveal</h1>
+        <div class="row">
+          <button id="openLink" class="secondary">Open a link</button>
+          <button id="revealFile" class="secondary">Reveal this binary's dir</button>
+          <span class="out" id="filesResult">-</span>
+        </div>
+        <p class="muted small">These launch external programs; the self test skips them.</p>
+      </section>
+
+      <section id="section-selftest" class="card">
+        <h1>Self test (UI automation hook)</h1>
+        <p class="muted small">
+          Every control above has a stable <code>id</code>, and the page runs a
+          scripted suite when loaded with <code>#selftest</code> - used by
+          <code>./demo --selftest</code> and useful for future end-to-end UI tests.
+        </p>
+        <div class="row">
+          <button id="runSelftest" class="primary">Run self test</button>
+          <button id="resetSelftest" class="secondary">Reset</button>
+          <span class="out" id="selftestResult">-</span>
+        </div>
+        <ul id="selftestLog" class="log muted small"></ul>
+      </section>
+    </main>
+  </div>
+
+  <script src="app.js"></script>
+</body>
 </html>

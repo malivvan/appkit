@@ -1,0 +1,153 @@
+/* appkit demo styles. The titlebar rules double as the drag-region contract:
+   appkit's app-region tracker reads the raw stylesheet text and turns
+   "-app-region: drag/no-drag" into native window-drag boxes (the legacy
+   "-webkit-app-region" / "-webview-app-region" spellings are also accepted),
+   so the whole bar moves the window on every platform while the close button
+   stays clickable. */
+* { box-sizing: border-box; }
+
+:root {
+  color-scheme: dark;
+  --radius: 8px;
+  --bg: #0f172add;
+  --panel: #1e293b;
+  --border: #334155;
+  --text: #e2e8f0;
+  --muted: #94a3b8;
+  --accent: #3b82f6;
+  --ok: #22c55e;
+  --err: #ef4444;
+}
+
+html, body {
+  margin: 0;
+  height: 100%;
+  border-radius: var(--radius);
+  color: var(--text);
+  overflow: hidden;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+}
+
+body {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  user-select: none;
+  background: var(--bg);
+}
+
+/* --- custom chrome ------------------------------------------------------- */
+
+#titlebar {
+  border-top-left-radius: var(--radius);
+  border-top-right-radius: var(--radius);
+  -webkit-user-select: none; /* the drag swallows clicks; no text selection */
+  -user-select: none;
+  -app-region: drag;         /* appkit: whole bar drags the window */
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 40px;
+  padding: 0 12px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
+  flex: 0 0 auto;
+}
+
+.tb-brand { font-weight: 700; letter-spacing: 0.02em; }
+.tb-brand-dim { color: var(--muted); font-weight: 400; }
+.tb-spacer { flex: 1; }
+.tb-badge {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 2px 8px;
+}
+
+.tb-dot {
+  -app-region: no-drag; /* appkit: button stays interactive */
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 11px;
+  line-height: 1;
+  padding: 6px;
+}
+.tb-dot:hover { background: var(--border); color: var(--text); border-color: var(--text); }
+/* The close dot is the destructive one: red on hover, like every OS. */
+.tb-dot.tb-close:hover { background: var(--err); color: #fff; border-color: var(--err); }
+
+/* --- layout -------------------------------------------------------------- */
+
+.layout { display: flex; flex: 1 1 auto; min-height: 0; }
+
+#nav {
+  width: 170px;
+  flex: 0 0 auto;
+  padding: 10px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  background: var(--panel);
+  border-right: 1px solid var(--border);
+  overflow-y: auto;
+}
+
+.nav-item {
+  color: var(--muted);
+  text-decoration: none;
+  font-size: 13px;
+  padding: 6px 10px;
+  border-radius: 6px;
+}
+.nav-item:hover { color: var(--text); background: rgba(148, 163, 184, 0.1); }
+.nav-item.active { color: #fff; background: var(--accent); }
+
+.content { flex: 1 1 auto; overflow-y: auto; padding: 16px; }
+
+.card { margin-bottom: 14px; }
+h1 { font-size: 15px; margin: 0 0 10px; }
+p { margin: 0 0 8px; }
+
+.muted { color: var(--muted); }
+.small { font-size: 12px; }
+code { background: rgba(148, 163, 184, 0.15); padding: 0 4px; border-radius: 4px; }
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+.out { color: var(--text); overflow-wrap: anywhere; font-weight: 600; }
+
+input, button {
+  font: inherit;
+  color: var(--text);
+  border-radius: 8px;
+  padding: 7px 12px;
+}
+input {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  width: 140px;
+}
+button { border: 1px solid var(--border); background: var(--panel); cursor: pointer; }
+button:hover { border-color: var(--accent); }
+button:disabled { opacity: 0.5; cursor: default; }
+button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+button.secondary:hover { color: #fff; }
+
+.log { list-style: none; padding: 0; max-height: 200px; overflow-y: auto; margin: 6px 0 0; }
+.log li { padding: 2px 0; border-bottom: 1px dashed var(--border); }
+.log li.pass::before { content: "✓ "; color: var(--ok); }
+.log li.fail::before { content: "✗ "; color: var(--err); }
+.log li .detail { color: var(--muted); }
