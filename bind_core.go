@@ -412,7 +412,7 @@ func planBindings(appBinds, viewBinds map[string]any, eventsGlobal string) (bind
 		if err := validateBindingName(name); err != nil {
 			return err
 		}
-		return checkBindTarget(name, "")
+		return checkBindTarget(name, eventsGlobal)
 	}
 	for _, name := range sortedKeys(appBinds) {
 		v := appBinds[name]
@@ -454,6 +454,9 @@ func checkBindTarget(name, eventsGlobal string) error {
 	}
 	if top == "__webview__" || strings.HasPrefix(top, "__appkit") {
 		return fmt.Errorf("appkit: binding name %q is reserved for appkit's internal page API", name)
+	}
+	if top == eventsGlobal {
+		return fmt.Errorf("appkit: binding name %q would replace the page's events API (window.%s)", name, eventsGlobal)
 	}
 	if reservedWindowNames[top] {
 		return fmt.Errorf("appkit: binding name %q would replace the page's own window.%s", name, top)
