@@ -811,3 +811,82 @@ func TestAutostartNilSafety(t *testing.T) {
 		t.Error("nil Autostart: Disable = nil, want ErrAutostartNotSupported")
 	}
 }
+
+func TestValidateTopLevelRejectsReservedAndDenylisted(t *testing.T) {
+	bad := []string{
+		"close", "open", "name", "fetch", "document", "location",
+		"__webview__",
+		"__appkit_event__",
+		"__appkitWindowDrag",
+		"events",
+		"close.thing", "name.x",
+	}
+	for _, name := range bad {
+		if err := checkBindTarget(name, "events"); err == nil {
+			t.Errorf("validateTopLevel(%q) = nil, want error", name)
+		}
+	}
+	good := []string{
+		"demo.close", "demo.theme", "appApi", "closeWindow", "eventsBus",
+	}
+	for _, name := range good {
+		if err := checkBindTarget(name, "events"); err != nil {
+			t.Errorf("validateTopLevel(%q) = %v, want nil", name, err)
+		}
+	}
+	if err := checkBindTarget("bus", "bus"); err == nil {
+		t.Error(`validateTopLevel("bus", "bus") must reject a binding on the events global`)
+	}
+	if err := checkBindTarget("events", "bus"); err != nil {
+		t.Errorf(`validateTopLevel("events", "bus") = %v, want nil (no clash after rename)`, err)
+	}
+}
+
+func TestCheckDottedPrefixes(t *testing.T) {
+	if err := checkNestedBindNames(map[string]bool{"api": true, "api.id": true}); err == nil {
+		t.Fatal("api + api.id must collide")
+	}
+	if err := checkNestedBindNames(map[string]bool{"app.x": true, "app.x.y": true, "app.x.y.z": true}); err == nil {
+		t.Fatal("nested namespace chain must collide")
+	}
+	if err := checkNestedBindNames(map[string]bool{"api": true}); err != nil {
+		t.Fatalf("single name: %v", err)
+	}
+	if err := checkNestedBindNames(map[string]bool{"a.b": true, "a.c": true, "b": true}); err != nil {
+		t.Fatalf("sibling names must not collide: %v", err)
+	}
+	if err := checkNestedBindNames(map[string]bool{"b": true, "b.a": true}); err == nil {
+		t.Fatal("b + b.a must collide")
+	}
+	if err := checkNestedBindNames(map[string]bool{"api": true, "apix": true}); err != nil {
+		t.Fatalf("apix is a different leaf, not a nested name: %v", err)
+	}
+}
+
+func TestApplyBindsRejectsInvalidPlans(t *testing.T) {
+	w := &bindMethodsWebViewStub{}
+	cases := []struct {
+		name      string
+		app, view map[string]any
+	}{
+		{"prefix collision across maps", map[string]any{"api": func() {}}, map[string]any{"api.id": func() {}}},
+		{"prefix collision within one map", nil, map[string]any{"demo": func() {}, "demo.theme": func() {}}},
+		{"reserved name", nil, map[string]any{"__appkit_event__": func() {}}},
+		{"denylisted top level", nil, map[string]any{"name": func() {}}},
+		{"events global", nil, map[string]any{"events": func() {}}},
+		{"bad segments", nil, map[string]any{"a..b": func() {}}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := applyBindings(w, tc.app, tc.view); err == nil {
+				t.Fatal("applyBinds must reject the plan")
+			}
+			if len(w.bindOrder) != 0 {
+				t.Fatalf("nothing must be bound on a rejected plan, bound: %v", w.bindOrder)
+			}
+		})
+	}
+	if err := applyBindings(w, map[string]any{"api": func() {}}, map[string]any{"api": func() {}}); err != nil {
+		t.Fatalf("same-name override must be allowed: %v", err)
+	}
+}

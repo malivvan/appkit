@@ -444,6 +444,9 @@ func planBindings(appBinds, viewBinds map[string]any, eventsGlobal string) (bind
 		binds = append(binds, bindItem{name: name, vals: []any{v}})
 		final[name] = true
 	}
+	if err := checkNestedBindNames(final); err != nil {
+		return nil, nil, err
+	}
 	return binds, unbinds, nil
 }
 
@@ -460,6 +463,20 @@ func checkBindTarget(name, eventsGlobal string) error {
 	}
 	if reservedWindowNames[top] {
 		return fmt.Errorf("appkit: binding name %q would replace the page's own window.%s", name, top)
+	}
+	return nil
+}
+
+func checkNestedBindNames(names map[string]bool) error {
+	keys := make([]string, 0, len(names))
+	for name := range names {
+		keys = append(keys, name)
+	}
+	sort.Strings(keys)
+	for i := 1; i < len(keys); i++ {
+		if strings.HasPrefix(keys[i], keys[i-1]+".") {
+			return fmt.Errorf("appkit: binding names %q and %q collide: %q is nested under %q, and a leaf and its namespace cannot both be bound", keys[i], keys[i-1], keys[i], keys[i-1])
+		}
 	}
 	return nil
 }
