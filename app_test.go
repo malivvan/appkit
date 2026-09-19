@@ -890,3 +890,24 @@ func TestApplyBindsRejectsInvalidPlans(t *testing.T) {
 		t.Fatalf("same-name override must be allowed: %v", err)
 	}
 }
+
+func FuzzParseRequestLine(f *testing.F) {
+	for _, seed := range []string{
+		"GET / HTTP/1.1", "HEAD /a?b=c HTTP/1.0", "", "GET /",
+		"GET  /  HTTP/1.1", "GET\t/x\tHTTP/1.1", "A B C D",
+	} {
+		f.Add(seed)
+	}
+	f.Fuzz(func(t *testing.T, raw string) {
+		method, target, version, ok := splitRequestLine(raw)
+		if !ok {
+			return
+		}
+		if method == "" || target == "" || version == "" {
+			t.Fatalf("parseRequestLine(%q) accepted an empty token: %q %q %q", raw, method, target, version)
+		}
+		if strings.ContainsAny(target, " \t") {
+			t.Fatalf("parseRequestLine(%q) accepted a target with whitespace: %q", raw, target)
+		}
+	})
+}

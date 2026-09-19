@@ -310,6 +310,43 @@ func TestLiveBindScriptGuardsAndReports(t *testing.T) {
 	}
 }
 
+func FuzzValidateBindName(f *testing.F) {
+	for _, seed := range []string{"demo.theme", "a..b", ".x", "x.", "a b", "", "\x00"} {
+		f.Add(seed)
+	}
+	f.Fuzz(func(t *testing.T, name string) {
+		err := validateBindingName(name)
+		if err != nil {
+			return
+		}
+		if name == "" {
+			t.Fatal("accepted an empty name")
+		}
+		for _, seg := range strings.Split(name, ".") {
+			if seg == "" {
+				t.Fatalf("accepted name with an empty segment: %q", name)
+			}
+			if strings.ContainsAny(seg, " \t\r\n") {
+				t.Fatalf("accepted name with whitespace: %q", name)
+			}
+		}
+	})
+}
+
+func FuzzMakeFuncWrapperArgDecode(f *testing.F) {
+	fn := func(prefix string, n int, rest ...float64) string { return prefix }
+	wrapper, err := wrapBinding(fn)
+	if err != nil {
+		f.Fatal(err)
+	}
+	for _, seed := range []string{`["p"]`, `["p",1]`, `["p",1,2.5]`, `["p","x"]`, `[]`, `{"a":1}`, `"p"`, `[1,2]`} {
+		f.Add(seed)
+	}
+	f.Fuzz(func(t *testing.T, raw string) {
+		_, _ = wrapper("", raw)
+	})
+}
+
 func TestGeneratedScriptsParse(t *testing.T) {
 	node, err := exec.LookPath("node")
 	if err != nil {

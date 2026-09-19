@@ -545,6 +545,20 @@ func TestViewShowAgainReveals(t *testing.T) {
 	}
 }
 
+func FuzzDecodeParam(f *testing.F) {
+	for _, seed := range []string{`[{"button":1}]`, `[]`, ``, `[null]`, `[1,2]`, `not json`} {
+		f.Add(seed)
+	}
+	f.Fuzz(func(t *testing.T, raw string) {
+		var got dragRequest
+		_ = decodeFirstParam(json.RawMessage(raw), &got)
+		var single dragRequest
+		if decodeFirstParam(json.RawMessage(`[{"button":7}]`), &single) && single.Button != 7 {
+			t.Fatalf("decodeParam filled Button = %d, want 7", single.Button)
+		}
+	})
+}
+
 func TestViewMaximizedUnshown(t *testing.T) {
 	var nilView *View
 	if nilView.Maximized() {
