@@ -119,6 +119,12 @@ func resolveAppURL(base, raw string) string {
 		return raw
 	}
 	out := base + u.Path
+	if u.RawQuery != "" {
+		out += "?" + u.RawQuery
+	}
+	if u.Fragment != "" {
+		out += "#" + u.EscapedFragment()
+	}
 	return out
 }
 
