@@ -28,9 +28,23 @@ jobs:
       - name: Run linter
         run: $(go env GOPATH)/bin/golangci-lint run ./...
 
+      - name: Verify import restrictions
+        run: |
+          if go list -f '{{range .Imports}}{{println .}}{{end}}' ./... | grep -xE 'net/http|crypto/tls'; then
+            echo "::error::the core must not import net/http or crypto/tls"
+            exit 1
+          fi
+
+
   unix:
-    name: Test ubuntu-latest
-    runs-on: ubuntu-latest
+    name: Test ${{ matrix.runner }}-${{ matrix.stack }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-latest, ubuntu-24.04-arm]
+        stack: [gtk4, gtk3]
+
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
@@ -40,13 +54,25 @@ jobs:
       - name: Setup GTK and Xvfb
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends xvfb xauth libgtk-3-0 libwebkit2gtk-4.1-0 libjavascriptcoregtk-4.1-0
+          if [ "${{ matrix.stack }}" = "gtk4" ]; then
+            sudo apt-get install -y --no-install-recommends xvfb xauth libgtk-4-1 libwebkitgtk-6.0-4 libjavascriptcoregtk-6.0-1
+          else
+            sudo apt-get install -y --no-install-recommends xvfb xauth libgtk-3-0 libgtk-4-1 libwebkit2gtk-4.1-0 libjavascriptcoregtk-4.1-0
+          fi
 
       - run: go build ./...
       - run: go vet ./...
 
       - name: Headless run (GUI tests must skip)
         run: go test -count=1 ./...
+
+      - name: GUI tests under Xvfb
+        timeout-minutes: 6
+        env:
+          LIBGL_ALWAYS_SOFTWARE: '1'
+          WEBKIT_DISABLE_DMABUF_RENDERER: '1'
+          WEBKIT_DISABLE_COMPOSITING_MODE: '1'
+        run: xvfb-run -a go test -count=1 -timeout 150s ./...
 
   macos:
     name: Test MacOS
