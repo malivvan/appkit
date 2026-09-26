@@ -5,13 +5,17 @@ package appkit
 import (
 	"errors"
 	"flag"
+	"fmt"
 	"os"
 	"os/exec"
 	"runtime"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 	"unsafe"
+
+	"github.com/ebitengine/purego"
 )
 
 var (
@@ -54,6 +58,10 @@ func TestMain(m *testing.M) {
 		resRichTypes.Store(richTypesScenario())
 		resEmbed.Store(embedScenario())
 		resWaitClose.Store(waitCloseScenario())
+	}
+	if !testing.Short() && geometryAvailable() {
+		resGeometry.Store(geometryScenario())
+		resIcon.Store(iconScenario())
 	}
 	os.Exit(m.Run())
 }
@@ -295,5 +303,190 @@ func TestWaitReturnsAfterLastWindowCloses(t *testing.T) {
 	requireGUI(t, got)
 	if got != "wait-ok" {
 		t.Fatalf("wait/close scenario = %q, want %q", got, "wait-ok")
+	}
+}
+
+const (
+	geomWidth  = 320
+	geomHeight = 240
+)
+
+func geometryAvailable() bool {
+	return hasDisplay() && ensureInit() == nil
+}
+
+func geometryScenario() string {
+	p := newGeometryProbe()
+	if p == nil {
+		return "ERROR: geometry probe could not bind the toolkit readback"
+	}
+	var sb strings.Builder
+	for _, state := range []State{StateNone, StateFixed} {
+		name := map[State]string{StateNone: "none", StateFixed: "fixed"}[state]
+		v := &View{Width: geomWidth, Height: geomHeight, State: state}
+		if err := testApp().Show(v); err != nil {
+			return "ERROR: " + name + ": show: " + err.Error()
+		}
+		for i := 0; i < 40; i++ {
+			gMainContextIteration(0, false)
+			time.Sleep(5 * time.Millisecond)
+		}
+		w, h := p.size(v.w.window)
+		fmt.Fprintf(&sb, "%s=%dx%d", name, w, h)
+		sb.WriteString(";")
+		v.Close()
+	}
+	return sb.String()
+}
+
+type geometryProbe struct {
+	size func(window uintptr) (w, h int)
+}
+
+func newGeometryProbe() *geometryProbe {
+	stack := "libgtk-3.so.0"
+	if gtk4 {
+		stack = "libgtk-4.so.1"
+	}
+	gtk, err := purego.Dlopen(stack, 2)
+	if err != nil {
+		return nil
+	}
+	var (
+		gtkWindowGetSize   func(window uintptr, w, h *int32)
+		gtkWidgetGetWidth  func(widget uintptr) int32
+		gtkWidgetGetHeight func(widget uintptr) int32
+	)
+	p := &geometryProbe{}
+	if gtk4 {
+		purego.RegisterLibFunc(&gtkWidgetGetWidth, gtk, "gtk_widget_get_width")
+		purego.RegisterLibFunc(&gtkWidgetGetHeight, gtk, "gtk_widget_get_height")
+		p.size = func(window uintptr) (int, int) {
+			return int(gtkWidgetGetWidth(window)), int(gtkWidgetGetHeight(window))
+		}
+	} else {
+		purego.RegisterLibFunc(&gtkWindowGetSize, gtk, "gtk_window_get_size")
+		p.size = func(window uintptr) (int, int) {
+			var w, h int32
+			gtkWindowGetSize(window, &w, &h)
+			return int(w), int(h)
+		}
+	}
+	return p
+}
+
+func TestCreationTimeGeometry(t *testing.T) {
+	got, _ := resGeometry.Load().(string)
+	if got == "" {
+		t.Skip("GTK/display not available; install the GTK libraries and run under a display")
+	}
+	if strings.HasPrefix(got, "ERROR: ") {
+		t.Fatalf("geometry scenario: %s", strings.TrimPrefix(got, "ERROR: "))
+	}
+	entries := strings.Split(strings.TrimSuffix(got, ";"), ";")
+	if len(entries) == 0 {
+		t.Fatalf("geometry scenario reported nothing: %q", got)
+	}
+	for _, entry := range entries {
+		name, rest, ok := strings.Cut(entry, "=")
+		if !ok {
+			t.Fatalf("malformed geometry report entry %q (in %q)", entry, got)
+		}
+		size := rest
+		if want := fmt.Sprintf("%dx%d", geomWidth, geomHeight); size != want {
+			t.Errorf("State%s window size = %s, want %s", name, size, want)
+		}
+	}
+}
+
+func iconScenario() string {
+	if !gtk4 || !haveX11Icons {
+		return ""
+	}
+	if err := setAppIcon(embeddedIcon, "appkit-icon-probe"); err != nil {
+		return "ERROR: setAppIcon: " + err.Error()
+	}
+	if len(appIconARGB) == 0 {
+		return "ERROR: setAppIcon built no _NET_WM_ICON payload"
+	}
+	v := &View{Width: 320, Height: 240}
+	if err := testApp().Show(v); err != nil {
+		return "ERROR: show: " + err.Error()
+	}
+	defer v.Close()
+	if !x11Display() {
+		return ""
+	}
+	for i := 0; i < 40; i++ {
+		gMainContextIteration(0, false)
+		time.Sleep(5 * time.Millisecond)
+	}
+	got, ok := readNETWMICON(v.w.window)
+	if !ok {
+		return "ERROR: _NET_WM_ICON is not set on the X11 window"
+	}
+	want := appIconARGB
+	if len(got) != len(want) {
+		return fmt.Sprintf("ERROR: _NET_WM_ICON has %d CARDINALs, want %d", len(got), len(want))
+	}
+	for i := range want {
+		if uint32(got[i]) != uint32(want[i]) {
+			return fmt.Sprintf("ERROR: _NET_WM_ICON[%d] = %#x, want %#x", i, uint32(got[i]), uint32(want[i]))
+		}
+	}
+	return fmt.Sprintf("icon-ok=%dx%d", uint32(got[0]), uint32(got[1]))
+}
+
+func readNETWMICON(window uintptr) ([]uintptr, bool) {
+	if !haveX11Icons || gdkX11SurfaceGetXid == nil || gdkX11DisplayGetXdisplay == nil || xInternAtom == nil {
+		return nil, false
+	}
+	xlib, err := purego.Dlopen("libX11.so.6", 2)
+	if err != nil {
+		return nil, false
+	}
+	var (
+		xGetWindowProperty func(display, window, property uintptr, longOffset, longLength int64, del int32, reqType uintptr,
+			actualType, actualFormat, nitems, bytesAfter *uintptr, prop *unsafe.Pointer) int32
+		xFree func(data uintptr) int32
+	)
+	purego.RegisterLibFunc(&xGetWindowProperty, xlib, "XGetWindowProperty")
+	purego.RegisterLibFunc(&xFree, xlib, "XFree")
+
+	surface := gtkNativeGetSurface(window)
+	if surface == 0 {
+		return nil, false
+	}
+	xid := gdkX11SurfaceGetXid(surface)
+	display := gdkX11DisplayGetXdisplay(gdkDisplayGetDefault())
+	if xid == 0 || display == 0 {
+		return nil, false
+	}
+	atom := xInternAtom(display, "_NET_WM_ICON", 1)
+	if atom == 0 {
+		return nil, false
+	}
+	var actualType, actualFormat, nitems, bytesAfter uintptr
+	var prop unsafe.Pointer
+	if xGetWindowProperty(display, xid, atom, 0, 1<<24, 0, 0,
+		&actualType, &actualFormat, &nitems, &bytesAfter, &prop) != 0 || prop == nil {
+		return nil, false
+	}
+	defer func() { _ = xFree(uintptr(prop)) }()
+	if actualType == 0 || actualFormat != 32 || nitems == 0 {
+		return nil, false
+	}
+	out := make([]uintptr, nitems)
+	copy(out, unsafe.Slice((*uintptr)(prop), nitems))
+	return out, true
+}
+
+func TestX11WindowIcon(t *testing.T) {
+	got, _ := resIcon.Load().(string)
+	if got == "" {
+		t.Skip("GTK4 X11 icon path not available (no display, or a Wayland/GTK3 backend)")
+	}
+	if strings.HasPrefix(got, "ERROR: ") {
+		t.Fatalf("icon scenario: %s", strings.TrimPrefix(got, "ERROR: "))
 	}
 }
