@@ -1,12 +1,15 @@
 package appkit
 
 import (
+	"bufio"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
+	"net"
 	"os"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -664,6 +667,27 @@ func TestServeAppFSRendersHTMLTemplates(t *testing.T) {
 	}
 }
 
+func TestStartViewServerRendersForTheView(t *testing.T) {
+	setScope(t, &appRuntime{cfg: appSetup{FS: fsys(map[string]string{
+		testIndex: `<h1>{{.App.Name}}</h1>`,
+		"app.css": testCSSBody,
+	})}})
+	view := &View{}
+	view.app = &App{Name: "looped"}
+	srv, err := activeRuntime.Load().startContentServer(view)
+	if err != nil {
+		t.Fatalf("startViewServer: %v", err)
+	}
+	t.Cleanup(func() { _ = srv.Close() })
+	addr := srv.ln.Addr().String()
+	if status, _, body := loopbackRawGet(t, addr, "/"); !strings.HasPrefix(status, "HTTP/1.1 200") || body != "<h1>looped</h1>" {
+		t.Fatalf("GET / = %q %q, want 200 with the rendered index.html", status, body)
+	}
+	if status, _, body := loopbackRawGet(t, addr, "/app.css"); !strings.HasPrefix(status, "HTTP/1.1 200") || body != testCSSBody {
+		t.Fatalf("GET /app.css = %q %q, want 200 with the raw css", status, body)
+	}
+}
+
 func TestEmitWithoutBridge(t *testing.T) {
 	w := &webview{}
 	if err := w.Emit("x"); err == nil {
@@ -809,6 +833,208 @@ func TestAutostartNilSafety(t *testing.T) {
 	}
 	if err := a.Disable(); err == nil {
 		t.Error("nil Autostart: Disable = nil, want ErrAutostartNotSupported")
+	}
+}
+
+func loopbackRawGet(t *testing.T, addr, target string) (status string, headers map[string]string, body string) {
+	t.Helper()
+	conn, err := net.Dial("tcp", addr)
+	if err != nil {
+		t.Fatalf("dial %s: %v", addr, err)
+	}
+	defer func() { _ = conn.Close() }()
+	if _, err := fmt.Fprintf(conn, "GET %s HTTP/1.1\r\nHost: localhost\r\n\r\n", target); err != nil {
+		t.Fatalf("write request: %v", err)
+	}
+	br := bufio.NewReader(conn)
+	statusLine, err := br.ReadString('\n')
+	if err != nil {
+		t.Fatalf("read status: %v", err)
+	}
+	headers = make(map[string]string)
+	for {
+		line, err := br.ReadString('\n')
+		if err != nil {
+			t.Fatalf("read headers: %v", err)
+		}
+		line = strings.TrimRight(line, "\r\n")
+		if line == "" {
+			break
+		}
+		if name, value, ok := strings.Cut(line, ":"); ok {
+			headers[strings.ToLower(strings.TrimSpace(name))] = strings.TrimSpace(value)
+		}
+	}
+	rest := make([]byte, 0, 256)
+	buf := make([]byte, 1024)
+	remaining, _ := strconv.Atoi(headers["content-length"])
+	for remaining > 0 {
+		n, err := br.Read(buf)
+		if n > 0 {
+			rest = append(rest, buf[:n]...)
+			remaining -= n
+		}
+		if err != nil {
+			break
+		}
+	}
+	return strings.TrimRight(statusLine, "\r\n"), headers, string(rest)
+}
+
+func mustLoopbackServe(t *testing.T, h contentFunc) *localServer {
+	t.Helper()
+	srv, _, err := startLocalServer(h)
+	if err != nil {
+		t.Fatalf("listenLoopbackHTTP: %v", err)
+	}
+	t.Cleanup(func() { _ = srv.Close() })
+	return srv
+}
+
+func TestLoopbackServesBodyAndMIME(t *testing.T) {
+	srv := mustLoopbackServe(t, func(r *contentRequest) *contentResponse {
+		if r.Method != "GET" {
+			t.Errorf("method = %q, want GET", r.Method)
+		}
+		if !strings.HasPrefix(r.URL, "http://localhost/") {
+			t.Errorf("URL = %q, want an http://localhost origin", r.URL)
+		}
+		return &contentResponse{Body: []byte(testHTML), MIME: "text/html; charset=utf-8"}
+	})
+	status, headers, body := loopbackRawGet(t, srv.ln.Addr().String(), "/index.html")
+	if !strings.HasPrefix(status, "HTTP/1.1 200") {
+		t.Fatalf("status = %q, want 200", status)
+	}
+	if body != testHTML {
+		t.Errorf("body = %q", body)
+	}
+	if ct := headers["content-type"]; ct != "text/html; charset=utf-8" {
+		t.Errorf("content-type = %q", ct)
+	}
+	for name, want := range map[string]string{
+		"cross-origin-opener-policy":   "same-origin",
+		"cross-origin-embedder-policy": "require-corp",
+		"cross-origin-resource-policy": "same-origin",
+	} {
+		if got := headers[name]; got != want {
+			t.Errorf("header %s = %q, want %q", name, got, want)
+		}
+	}
+}
+
+func TestLoopbackServesAppFSAndNotFound(t *testing.T) {
+	serve := fsContentFunc(fsys(map[string]string{testIndex: "<h1>root</h1>", "app.css": testCSSBody}), nil)
+	srv, base, err := startLocalServer(serve)
+	if err != nil {
+		t.Fatalf("listenLoopbackHTTP: %v", err)
+	}
+	t.Cleanup(func() { _ = srv.Close() })
+	if !strings.HasPrefix(base, "http://localhost:") {
+		t.Fatalf("base = %q, want http://localhost:<port>", base)
+	}
+	addr := srv.ln.Addr().String()
+	if status, _, body := loopbackRawGet(t, addr, "/app.css"); !strings.HasPrefix(status, "HTTP/1.1 200") || body != testCSSBody {
+		t.Fatalf("GET /app.css = %q %q, want 200 body{}", status, body)
+	}
+	if status, _, _ := loopbackRawGet(t, addr, "/missing.html"); !strings.HasPrefix(status, "HTTP/1.1 404") {
+		t.Fatalf("missing file = %q, want 404", status)
+	}
+}
+
+func TestLoopbackCloseIdempotent(t *testing.T) {
+	srv := mustLoopbackServe(t, func(r *contentRequest) *contentResponse { return &contentResponse{Body: []byte("x")} })
+	addr := srv.ln.Addr().String()
+	if err := srv.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if err := srv.Close(); err != nil {
+		t.Fatalf("second Close: %v, want nil", err)
+	}
+	if conn, err := net.Dial("tcp", addr); err == nil {
+		_ = conn.Close()
+		t.Error("connection succeeded after Close, want refused")
+	}
+}
+
+func TestLoopbackIdleTimeout(t *testing.T) {
+	if testing.Short() {
+		t.Skip("timing test; skipped under -short")
+	}
+	srv, _, err := startLocalServer(func(r *contentRequest) *contentResponse { return nil })
+	if err != nil {
+		t.Fatalf("listenLoopbackHTTP: %v", err)
+	}
+	defer func() { _ = srv.Close() }()
+	deadline := time.Now().Add(2 * localServerIdleTTL)
+	for !srv.isClosed() {
+		if time.Now().After(deadline) {
+			t.Fatalf("server still open after %v idle; idle timeout not firing", 2*localServerIdleTTL)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+}
+
+func TestRewriteAppURL(t *testing.T) {
+	base := "http://localhost:41239"
+	for _, tc := range []struct{ in, want string }{
+		{"app://app/index.html", base + "/index.html"},
+		{"app://app/a/b.css?x=1#frag", base + "/a/b.css?x=1#frag"},
+		{"https://example.com/x", "https://example.com/x"},
+		{"about:blank", "about:blank"},
+		{"", ""},
+	} {
+		if got := resolveAppURL(base, tc.in); got != tc.want {
+			t.Errorf("rewriteAppURL(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+	if got := resolveAppURL("", "app://app/index.html"); got != "app://app/index.html" {
+		t.Errorf("rewriteAppURL with empty base = %q, want the raw app:// URL", got)
+	}
+}
+
+func setScope(t *testing.T, s *appRuntime) {
+	t.Helper()
+	prev := activeRuntime.Load()
+	activeRuntime.Store(s)
+	t.Cleanup(func() { activeRuntime.Store(prev) })
+}
+
+func TestViewContentBaseSchemeMode(t *testing.T) {
+	setScope(t, &appRuntime{cfg: appSetup{FS: fsys(map[string]string{testIndex: "x"})}})
+	base, transient, err := contentRootFor(&View{}, false)
+	if err != nil || base != "" || transient != nil {
+		t.Fatalf("viewContentBase(scheme view) = %q, %v, %v; want \"\", nil, nil", base, transient, err)
+	}
+}
+
+func TestViewContentBaseHTTPAndDarwin(t *testing.T) {
+	setScope(t, &appRuntime{cfg: appSetup{FS: fsys(map[string]string{"ping": "pong"})}})
+	base, transient, err := contentRootFor(&View{}, false)
+	if err != nil || base != "" || transient != nil {
+		t.Fatalf("no-HTTP non-darwin view = %q, %v, %v; want scheme", base, transient, err)
+	}
+	setScope(t, &appRuntime{cfg: appSetup{FS: fsys(map[string]string{"ping": "pong"}), HTTP: true}})
+	base, transient, err = contentRootFor(&View{}, false)
+	if err != nil {
+		t.Fatalf("viewContentBase (App.HTTP): %v", err)
+	}
+	if transient == nil || !strings.HasPrefix(base, "http://localhost:") {
+		t.Fatal("App.HTTP view: want a temporary loopback server")
+	}
+	closeLoopbackServer(transient)
+	setScope(t, &appRuntime{cfg: appSetup{FS: fsys(map[string]string{"ping": "pong"})}})
+	base, transient, err = contentRootFor(&View{}, true)
+	if err != nil {
+		t.Fatalf("viewContentBase (darwin): %v", err)
+	}
+	if transient == nil || !strings.HasPrefix(base, "http://localhost:") {
+		t.Fatal("darwin view: want a temporary loopback server even without App.HTTP")
+	}
+	closeLoopbackServer(transient)
+	setScope(t, &appRuntime{})
+	base, transient, err = contentRootFor(&View{}, true)
+	if err != nil || base != "" || transient != nil {
+		t.Fatalf("viewContentBase without App.FS = %q, %v, %v; want nothing", base, transient, err)
 	}
 }
 
