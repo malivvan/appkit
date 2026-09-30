@@ -6,8 +6,15 @@ on:
   pull_request:
   workflow_dispatch:
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+
 permissions:
   contents: read
+
+env:
+  GOFLAGS: -trimpath "-ldflags=-s -w -buildid="
 
 jobs:
   lint:
@@ -25,15 +32,22 @@ jobs:
       - name: Install golangci-lint
         run: go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.13.1
 
-      - name: Run linter
-        run: $(go env GOPATH)/bin/golangci-lint run ./...
-
-      - name: Verify import restrictions
+      - name: Run linter (all GOOS variants)
         run: |
-          if go list -f '{{range .Imports}}{{println .}}{{end}}' ./... | grep -xE 'net/http|crypto/tls'; then
-            echo "::error::the core must not import net/http or crypto/tls"
-            exit 1
-          fi
+          for os in darwin linux windows; do
+            echo "== GOOS=$os =="
+            GOOS=$os $(go env GOPATH)/bin/golangci-lint run ./...
+          done
+
+      - name: Verify import restrictions (all GOOS variants)
+        run: |
+          for os in darwin linux windows; do
+            echo "== GOOS=$os =="
+            GOOS=$os make check-imports
+          done
+
+      - name: Run unit tests with the race detector
+        run: go test -race -covermode atomic -coverprofile=covprofile ./...
 
 
   unix:
@@ -62,6 +76,9 @@ jobs:
 
       - run: go build ./...
       - run: go vet ./...
+
+      - name: Relax user namespace restrictions
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0 || true
 
       - name: Headless run (GUI tests must skip)
         run: go test -count=1 ./...
@@ -98,3 +115,75 @@ jobs:
 
       - run: go build ./...
       - run: go vet ./...
+
+      - name: Run WebView2 tests
+        timeout-minutes: 5
+        env:
+          WEBVIEW2_DEBUG: '1'
+        shell: pwsh
+        run: |
+          go test -c -o appkit_test.exe .
+
+          $p = Start-Process -FilePath .\appkit_test.exe `
+            -ArgumentList '-test.v','-test.timeout=180s' `
+            -NoNewWindow -PassThru `
+            -RedirectStandardOutput out.txt -RedirectStandardError err.txt
+
+          $exited = $p.WaitForExit(210000)
+          if (Test-Path out.txt) { Get-Content out.txt }
+          if (Test-Path err.txt) { Get-Content err.txt }
+
+          if (-not $exited) {
+            Write-Host "::error::Test timed out after 210s – force-killing"
+            Stop-Process -Id $p.Id -Force
+            exit 1
+          }
+          exit $p.ExitCode
+
+  build:
+    name: Build (${{ matrix.target }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { target: linux_amd64, goos: linux, goarch: amd64 }
+          - { target: linux_arm64, goos: linux, goarch: arm64 }
+          - { target: linux_386, goos: linux, goarch: '386' }
+          - { target: linux_armv7, goos: linux, goarch: arm, goarm: '7' }
+          - { target: linux_armv6, goos: linux, goarch: arm, goarm: '6' }
+          - { target: linux_armv5, goos: linux, goarch: arm, goarm: '5' }
+          - { target: linux_loong64, goos: linux, goarch: loong64 }
+          - { target: linux_ppc64le, goos: linux, goarch: ppc64le }
+          - { target: linux_riscv64, goos: linux, goarch: riscv64 }
+          - { target: linux_s390x, goos: linux, goarch: s390x }
+          - { target: darwin_amd64, goos: darwin, goarch: amd64 }
+          - { target: darwin_arm64, goos: darwin, goarch: arm64 }
+          - { target: windows_amd64, goos: windows, goarch: amd64 }
+          - { target: windows_arm64, goos: windows, goarch: arm64 }
+          - { target: windows_386, goos: windows, goarch: '386' }
+          - { target: freebsd_amd64, goos: freebsd, goarch: amd64 }
+          - { target: freebsd_arm64, goos: freebsd, goarch: arm64 }
+          - { target: netbsd_amd64, goos: netbsd, goarch: amd64 }
+          - { target: netbsd_arm64, goos: netbsd, goarch: arm64 }
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      - name: Build
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+        run: |
+          mkdir -p dist
+          out="dist/appkit_${{ matrix.target }}"
+          if [ "$GOOS" = windows ]; then out="$out.exe"; fi
+          CGO_ENABLED=0 GOARM="${{ matrix.goarm }}" go build -o "$out" ./demo
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.target }}
+          path: dist/*
+          if-no-files-found: error
