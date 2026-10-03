@@ -1,4 +1,9 @@
 version: "2"
 
+# Pins the linter set so a golangci-lint upgrade cannot silently widen or
+# narrow what CI enforces. CI runs `golangci-lint run ./...` for
+# GOOS=darwin/linux/windows (see .github/workflows/ci.yml); "standard" is the
+# tool's own default set (errcheck, govet, ineffassign, staticcheck, unused),
+# named explicitly so it stays fixed here.
 linters:
   default: standard
