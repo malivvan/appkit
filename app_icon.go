@@ -61,6 +61,7 @@ func scaleIconPNG(pngData []byte, size int) []byte {
 	return buf.Bytes()
 }
 
+//lint:ignore U1000 macOS renders the Dock icon at any size natively, so only the Unix and Windows icon installers (app_unix.go, app_windows.go) downscale through this shared helper.
 func downscaleIcon(src *image.NRGBA, size int) *image.NRGBA {
 	sw, sh := src.Bounds().Dx(), src.Bounds().Dy()
 	dst := image.NewNRGBA(image.Rect(0, 0, size, size))
