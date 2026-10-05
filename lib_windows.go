@@ -14,7 +14,7 @@ import (
 	"syscall"
 	"unsafe"
 
-	"github.com/ebitengine/purego"
+	"github.com/malivvan/purego"
 )
 
 var errNoWindow = errors.New("webview2: failed to create window")

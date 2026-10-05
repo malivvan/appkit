@@ -8,7 +8,7 @@ import (
 	"unicode/utf16"
 	"unsafe"
 
-	"github.com/ebitengine/purego"
+	"github.com/malivvan/purego"
 )
 
 type guid struct {

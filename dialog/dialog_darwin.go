@@ -5,7 +5,7 @@ import (
 	"sync"
 	"unsafe"
 
-	"github.com/ebitengine/purego/objc"
+	"github.com/malivvan/purego/objc"
 )
 
 const nsModalResponseOK = 1

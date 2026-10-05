@@ -15,7 +15,7 @@ import (
 	"time"
 	"unsafe"
 
-	"github.com/ebitengine/purego"
+	"github.com/malivvan/purego"
 )
 
 var (

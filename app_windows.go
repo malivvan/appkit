@@ -15,7 +15,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/ebitengine/purego"
+	"github.com/malivvan/purego"
 	winregistry "golang.org/x/sys/windows/registry"
 )
 

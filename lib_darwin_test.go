@@ -11,7 +11,7 @@ import (
 	"time"
 	"unsafe"
 
-	"github.com/ebitengine/purego/objc"
+	"github.com/malivvan/purego/objc"
 
 	"github.com/malivvan/appkit/dialog"
 )

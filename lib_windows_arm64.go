@@ -5,7 +5,7 @@ package appkit
 import (
 	"unsafe"
 
-	"github.com/ebitengine/purego"
+	"github.com/malivvan/purego"
 )
 
 func (i *controller) putBounds(r rect) {

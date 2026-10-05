@@ -7,7 +7,7 @@ import (
 	"sync"
 	"unsafe"
 
-	"github.com/ebitengine/purego"
+	"github.com/malivvan/purego"
 )
 
 const (

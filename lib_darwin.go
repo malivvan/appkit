@@ -10,8 +10,8 @@ import (
 	"sync/atomic"
 	"unsafe"
 
-	"github.com/ebitengine/purego"
-	"github.com/ebitengine/purego/objc"
+	"github.com/malivvan/purego"
+	"github.com/malivvan/purego/objc"
 
 	"github.com/malivvan/appkit/dialog"
 )
