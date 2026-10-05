@@ -1,68 +1,90 @@
-# appkit
+# appkit [![Go Reference](https://pkg.go.dev/badge/github.com/malivvan/appkit.svg)](https://pkg.go.dev/github.com/malivvan/appkit) [![Release](https://img.shields.io/github/v/release/malivvan/appkit.svg?sort=semver)](https://github.com/malivvan/appkit/releases/latest) [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-**Build web-rendered desktop apps in pure Go.** appkit drives the web engine the
-operating system already ships (WKWebView, Edge WebView2, WebKitGTK) behind one
-Go API, and layers the desktop services on top: windows, drag regions, native
-dialogs, notifications, clipboard, tray, single-instance, URL/file opening, and
-autostart.
+**appkit** drives the web engine the operating system already ships (WKWebView,
+WebView2, WebKitGTK) behind one Go API, and layers the desktop services on top:
+windows, drag regions, native dialogs, notifications, clipboard, tray, single-
+instance, URL/file opening, and autostart.
 
-**No cgo.** Platform libraries are loaded at runtime with
-[purego](https://github.com/malivvan/purego), so any target cross-compiles from
-any host with `CGO_ENABLED=0` - no MinGW, no sysroots, `go install` just works.
+Platform libraries are loaded at runtime with [purego](https://github.com/malivvan/purego),
+so any target cross-compiles from any host - no MinGW, no sysroots, `go install` just works.
 
-Not Electron: no engine is bundled, so binaries stay small - but the target
-machine supplies the view.
+The package is deliberately small and simple, with no hidden dependencies. The API is designed
+to be declarative and goroutine-safe. No engine is bundled, so binaries stay small.
 
-> **TL;DR** - `go get github.com/malivvan/appkit`, paste the example below, done.
-> Jump to [Quick start](#quick-start) or [Troubleshooting](#troubleshooting).
+## Installation
+```sh
+# go 1.27.1+
+go get github.com/malivvan/webkitgtk@latest
+```
 
-## Contents
+## Supported Platforms
 
-- [How it works](#how-it-works)
-- [Requirements](#requirements)
-- [Quick start](#quick-start)
-- [Core concepts](#core-concepts)
-- [Desktop services](#desktop-services)
-- [Window runtime state](#window-runtime-state)
-- [Demos & testing](#demos--testing)
-- [Troubleshooting](#troubleshooting)
-- [Project layout](#project-layout)
+appkit binds the OS web engine through purego, so the following platforms are supported by simply setting
+`GOOS` and `GOARCH` to the desired target and running `go build` or `go install`. The engine is chosen automatically
+based on the OS.
 
-## How it works
+| GOOS    | GOARCH                                                                           | Engine    |
+|---------|----------------------------------------------------------------------------------|-----------|
+| Linux   | amd64, arm64*, 386, armv7*, armv6*, armv5*, loong64*, ppc64le*, riscv64*, s390x* | WebKitGTK |
+| FreeBSD | amd64, arm64*                                                                    | WebKitGTK |
+| NetBSD  | amd64, arm64*                                                                    | WebKitGTK |
+| Windows | amd64, arm64*, 386                                                               | WebView2  |
+| Darwin  | amd64, arm64*                                                                    | WKWebView |
 
-| OS | Engine | Extra requirement |
-|---|---|---|
-| macOS | WKWebView | none |
-| Windows | Edge WebView2 Runtime | preinstalled on current Win10/11, else Evergreen |
-| Linux/BSD | WebKitGTK (GTK4 or GTK3, auto-detected) | distro package |
-
-Supported build targets track [purego](https://github.com/malivvan/purego): Linux
-(amd64, arm64, 386, armv7/6/5, loong64, ppc64le, riscv64, s390x), FreeBSD & NetBSD
-(amd64, arm64), Windows (amd64, arm64, 386), Darwin (amd64, arm64). Exotic targets
-are compile-tested only - runtime verification is welcome via an issue.
-
-`App.Backend()` reports the loaded engine; features a platform cannot support
-cleanly return `ErrUnsupported` rather than a broken shim.
+> Architectures marked with a `*` have only been tested to compile, not to run. If somebody has
+> a machine of that architecture and can verify the runtime, please open an issue.
 
 ## Requirements
+Either
+[`webkit2gtk-4.1`](https://pkgs.org/search/?q=webkit2gtk-4.1&on=name)
+([*stable*](https://webkitgtk.org/reference/webkit2gtk/stable/)) or
+[`webkitgtk-6.0`](https://pkgs.org/search/?q=webkitgtk-6.0&on=name)
+([*unstable*](https://webkitgtk.org/reference/webkitgtk/unstable))
+is required at runtime. If both are installed the latest version will be used.
+<table>
+	<tr>
+		<td style="font-size: 14px;font-weight: bold;">Debian / Ubuntu</td>
+		<td><code>apt install libwebkit2gtk-4.1-0</code></td>
+		<td><code>apt install libwebkitgtk-6.0-4</code></td>
+	</tr>
+	<tr>
+		<td style="font-size: 14px;font-weight: bold;">RHEL / Fedora</td>
+		<td><code>dnf install webkit2gtk4.1</code></td>
+		<td><code>dnf install webkitgtk6.0</code></td>
+	</tr>
+	<tr>
+		<td style="font-size: 14px;font-weight: bold;">Alpine</td>
+		<td><code>apk add webkit2gtk-4.1</code></td>
+		<td><code>apk add webkit2gtk-6.0</code></td>
+	</tr>
+	<tr>
+		<td style="font-size: 14px;font-weight: bold;">Arch</td>
+		<td><code>pacman -S webkit2gtk-4.1</code></td>
+		<td><code>pacman -S webkitgtk-6.0</code></td>
+	</tr>
+	<tr>
+		<td style="font-size: 14px;font-weight: bold;">Gentoo</td>
+		<td colspan="2" align="center"><code style="margin:0px;padding:2px">emerge -av net-libs/webkit-gtk</code> (slot 4.1 or 6.0)</td>
+	</tr>
+	<tr>
+		<td style="font-size: 14px;font-weight: bold;">NixOS</td>
+		<td><code>nix-env -iA nixpkgs.webkitgtk_4_1</code></td>
+		<td><code>nix-env -iA nixpkgs.webkitgtk_6_0</code></td>
+	</tr>
+	<tr>
+		<td style="font-size: 14px;font-weight: bold;">FreeBSD</td>
+		<td><code>pkg install webkit2-gtk3</code> (flavor 4.1)</td>
+		<td><code>pkg install webkit2-gtk4</code></td>
+	</tr>
+	<tr>
+		<td style="font-size: 14px;font-weight: bold;">NetBSD</td>
+		<td><code>pkg_add webkit-gtk41</code></td>
+		<td><em>not yet available (pkgsrc stuck at 2.36.8)</em></td>
+	</tr>
+</table>
 
-- **Go** 1.27 or newer.
-- **Windows:** the Edge WebView2 Runtime (already present on current Windows).
-- **macOS:** nothing.
-- **Linux/BSD:** a WebKitGTK package on the dynamic-linker path, matching the
-  binary's architecture:
-
-  ```bash
-  apt install libwebkit2gtk-4.1-0      # Debian/Ubuntu, GTK3
-  apt install libwebkitgtk-6.0-4       # Debian/Ubuntu, GTK4
-  dnf install webkit2gtk4.1            # Fedora
-  pacman -S webkit2gtk-4.1             # Arch
-  ```
-
-  Debug with `ldconfig -p | grep webkit`. Pin the stack with
-  `APPKIT_BACKEND=webkitgtk-6.0` (GTK4) or `webkit2gtk-4.1` (GTK3). On NixOS the
-  libraries are not on the default loader path - add `webkitgtk_4_1` /
-  `webkitgtk_6_0` to `buildInputs`, or use `LD_LIBRARY_PATH` / `nix-ld`.
+> The environment variable `APPKIT_BACKEND` can be set to `webkit2gtk-4.1` or
+> `webkitgtk-6.0` to force a specific WebKitGTK version.
 
 ## Quick start
 
@@ -115,7 +137,7 @@ and hand it to `App.Show`. An `*App` is configuration plus a runtime scope, like
 `http.Server` - settings are frozen on the first method call. `Wait` returns on
 `App.Quit`, or when the last window closes if `App.Exit` is true.
 
-**Serving UI.** Assign an `io/fs.FS` to `App.FS` and every view is served from a
+**Secure Context** Assign an `io/fs.FS` to `App.FS` and every view is served from a
 uniform **`app://`** origin - no ports, secure, cross-origin isolated
 (COOP/COEP/CORP), so `localStorage`, `crypto.subtle`, `getUserMedia`, and
 **SharedArrayBuffer** all work. HTML files are templates executed with the
@@ -126,7 +148,7 @@ requesting `View` as data (auto-escaped):
 <p>{{.URL}} - {{.Width}}x{{.Height}}</p>
 ```
 
-**Bindings.** `App.Bind` (app-wide) and `View.Bind` (per-view) are declarative
+**Bindings** `App.Bind` (app-wide) and `View.Bind` (per-view) are declarative
 maps exposed on the page under `window.*`. The value's kind alone decides the
 behavior - no struct walking or tags:
 
@@ -137,28 +159,28 @@ behavior - no struct walking or tags:
 Names are dotted paths (`"api.call"` → `window.api.call`) validated at window
 creation. `View.Bind` overrides `App.Bind`; all calls return Promises.
 
-**Frameless everywhere.** Windows are always frameless and fully transparent -
+**Events** Every view gets a lightweight pub/sub bridge: `view.On` / `view.Off`
+/ `view.Emit` on the Go side, `window.events` on the page (rename via
+`App.Events`). Each event reaches every listener on both sides exactly once.
+
+**Always Frameless** Windows are always frameless and fully transparent -
 the page *is* the chrome. Mark movable regions with CSS (`-app-region: drag`;
 Electron's `-webkit-app-region` alias is accepted), tracked live through
 scrolling, resizing, and DOM changes. Double-clicking a drag region toggles
 maximize. `State` controls resizability; `StateFixed` disables edge resizing.
 
-**Events.** Every view gets a lightweight pub/sub bridge: `view.On` / `view.Off`
-/ `view.Emit` on the Go side, `window.events` on the page (rename via
-`App.Events`). Each event reaches every listener on both sides exactly once.
-
 ## Desktop services
 
-| Service | API |
-|---|---|
-| Tray | `App.Tray` - declarative menu tree, checkboxes, submenus, per-item icons; Linux via D-Bus StatusNotifierItem, so no desktop is excluded |
-| Notifications | `App.Notify`, `notify.Show`, `ShowOpts`, `Alert`, `Beep` |
-| Native dialogs | `View.Dialog` - open / multi-open / save / directory with filters |
-| Clipboard | `App.Copy` / `App.Paste` |
-| Single instance | `App.Exec` - later launches forward args and exit; `--new-instance` bypasses |
-| Autostart | `App.Autostart()` - XDG `.desktop`, `HKCU\…\Run`, or macOS LaunchAgent/`SMAppService` |
-| Open / reveal | `App.Open` / `App.Reveal` |
-| Runtime icon | `App.Icon` (best-effort; Windows reads from executable resources) |
+| Service         | API                                                                                                                                     |
+|-----------------|-----------------------------------------------------------------------------------------------------------------------------------------|
+| Systray         | `App.Tray` - declarative menu tree, checkboxes, submenus, per-item icons; Linux via D-Bus StatusNotifierItem, so no desktop is excluded ||
+| Notifications   | `App.Notify`, `notify.Show`, `ShowOpts`, `Alert`, `Beep`                                                                                |
+| Native dialogs  | `View.Dialog` - open / multi-open / save / directory with filters                                                                       |
+| Clipboard       | `App.Copy` / `App.Paste`                                                                                                                |
+| Single instance | `App.Exec` - later launches forward args and exit; `--new-instance` bypasses                                                            |
+| Autostart       | `App.Autostart()` - XDG `.desktop`, `HKCU\…\Run`, or macOS LaunchAgent/`SMAppService`                                                   |
+| Open / reveal   | `App.Open` / `App.Reveal`                                                                                                               |
+| Runtime icon    | `App.Icon` (best-effort; Windows reads from executable resources)                                                                       |
 
 Only one tray per process (`ErrAlreadyRunning` on a second).
 
