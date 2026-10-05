@@ -60,6 +60,7 @@ type autostartInfo struct {
 
 func main() {
 	var (
+		frame    = flag.Bool("frame", false, "use the OS window frame - title bar and system buttons - instead of the custom borderless chrome")
 		debug    = flag.Bool("debug", false, "open the platform web inspector / dev tools")
 		selftest = flag.Bool("selftest", false, "windowed showcase that runs the UI self test and exits 0/1")
 		httpFn   = flag.Bool("http", false, "serve the window's app:// content over a temporary loopback HTTP server (App.HTTP); Linux/Windows opt in, macOS always does")
@@ -69,7 +70,7 @@ func main() {
 
 	_ = debug
 
-	app := &appkit.App{Name: "appkit demo xx"}
+	app := &appkit.App{Name: "appkit demo xx", Exit: true}
 
 	var w *appkit.View
 	if *trayFn && !*selftest {
@@ -137,6 +138,7 @@ func main() {
 	var d *windowDemo
 	view := &appkit.View{
 		Debug:  true,
+		Frame:  *frame,
 		Width:  1000,
 		Height: 680,
 		Bind: map[string]any{

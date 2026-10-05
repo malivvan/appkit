@@ -17,7 +17,10 @@ import (
 )
 
 const (
-	nsWindowStyleMaskResizable = 1 << 3
+	nsWindowStyleMaskTitled         = 1 << 0
+	nsWindowStyleMaskClosable       = 1 << 1
+	nsWindowStyleMaskMiniaturizable = 1 << 2
+	nsWindowStyleMaskResizable      = 1 << 3
 
 	nsBackingStoreBuffered = 2
 
@@ -143,12 +146,27 @@ type webview struct {
 	manager        objc.ID
 	scriptHandler  objc.ID
 
-	ownsWindow            bool
-	firstMouse            bool
+	ownsWindow bool
+	firstMouse bool
+	// frameless windows have no title bar/frame and a fully transparent
+	// background (View.Frame is false); the page's -app-region boxes decide
+	// which parts move the window (via -[NSWindow
+	// performWindowDragWithEvent:]), and the resizable style mask keeps the
+	// native edge/corner resizing with its resize cursors.
+	frameless bool
+	// lastWidth/lastHeight remember the content size so a synthesized drag
+	// event can be placed in window coordinates (the legacy path avoided
+	// struct-returning frame reads; see applyViewGeometry and objc.Send[cgRect]
+	// for the window-frame reads used by manual zoom).
 	lastWidth, lastHeight int
-	savedFrame            cgRect
-	maximized             bool
-	minimized             bool
+	// Frameless windows can't use AppKit's built-in zoom/miniaturize, so the
+	// engine tracks the manual zoom/hide state itself (see Maximize/Unmaximize
+	// and Minimize/Unminimize). savedFrame holds the pre-maximize window frame
+	// so Unmaximize can restore it exactly; frameless Minimize is implemented
+	// as a hide (orderOut) because a borderless NSWindow has no Dock-miniature.
+	savedFrame cgRect
+	maximized  bool
+	minimized  bool
 
 	isSizeSet         bool
 	isInitScriptAdded bool
@@ -309,6 +327,14 @@ func registerAppClasses() error {
 		return fmt.Errorf("webview: url scheme handler class: %w", err)
 	}
 
+	// A plain NSWindow created with no title bar (NSWindowStyleMaskBorderless)
+	// can NEVER become key - makeKeyAndOrderFront: / Raise would order it to
+	// the front but it stays non-key, and keyboard input never reaches the web
+	// view. Frameless appkit windows (View.Frame false, the default) therefore
+	// allocate from this subclass; framed windows keep the plain NSWindow,
+	// whose titled style already allows keyness. Subclassing is the only
+	// mechanism - there is no window-level or runtime switch for it (same
+	// shape as firstMouseViewClass below).
 	borderlessWindowClass, err = objc.RegisterClass(
 		"AppkitBorderlessWindow", objc.GetClass("NSWindow"), nil, nil,
 		[]objc.MethodDef{
@@ -361,6 +387,7 @@ func newWebView(v *View, serve contentFunc, app objc.ID, loopRunning bool) *webv
 	w := &webview{
 		ownsWindow: true,
 		firstMouse: v.FirstMouse,
+		frameless:  !v.Frame,
 		bindings:   map[string]binding{},
 		serve:      serve,
 		closed:     make(chan struct{}),
@@ -423,11 +450,18 @@ func newWebView(v *View, serve contentFunc, app objc.ID, loopRunning bool) *webv
 			w.webView.Send(selector("setInspectable:"), true)
 		}
 
-		w.window.Send(selector("setOpaque:"), false)
-		clear := objcClass("NSColor").Send(selector("clearColor"))
-		w.window.Send(selector("setBackgroundColor:"), clear)
-		w.webView.Send(selector("setValue:forKey:"),
-			objcClass("NSNumber").Send(selector("numberWithBool:"), false), nsString("drawsBackground"))
+		// Frameless windows are fully transparent by default: mark the window
+		// non-opaque with a clear background and stop the web view from
+		// drawing its own, so transparent page areas reveal the desktop behind
+		// the window (the page's html/body can set its own background). Frame
+		// windows keep the OS's opaque window.
+		if w.frameless {
+			w.window.Send(selector("setOpaque:"), false)
+			clear := objcClass("NSColor").Send(selector("clearColor"))
+			w.window.Send(selector("setBackgroundColor:"), clear)
+			w.webView.Send(selector("setValue:forKey:"),
+				objcClass("NSNumber").Send(selector("numberWithBool:"), false), nsString("drawsBackground"))
+		}
 
 		w.uiDelegate = objc.ID(uiDelegateClass).Send(selector("new"))
 		registerEngine(w.uiDelegate, w)
@@ -454,7 +488,7 @@ func newWebView(v *View, serve contentFunc, app objc.ID, loopRunning bool) *webv
 			w.window.Send(selector("makeFirstResponder:"), w.webView)
 		}
 	})
-	if w.ownsWindow {
+	if w.frameless && w.ownsWindow {
 		w.pushUserScript(buildRegionScript(v.State != StateFixed, false, "darwin"))
 	}
 	if loopRunning && w.ownsWindow {
@@ -679,10 +713,28 @@ func (w *webview) appDidFinishLaunching(app objc.ID) {
 
 func (w *webview) continueWindowInit() {
 	autorelease(func() {
-		win := objc.ID(borderlessWindowClass).Send(selector("alloc"))
+		// Frameless windows must allocate from borderlessWindowClass: a plain
+		// NSWindow with no title bar cannot become key (see registerAppClasses),
+		// and every window needs keyness - Raise, Show and the initial
+		// makeKeyAndOrderFront below all depend on it.
+		winClass := objc.Class(objcClass("NSWindow"))
+		if w.frameless {
+			winClass = borderlessWindowClass
+		}
+		win := objc.ID(winClass).Send(selector("alloc"))
+		style := uint(nsWindowStyleMaskTitled)
+		if w.frameless {
+			// NSWindowStyleMaskBorderless == 0: no title bar or system buttons.
+			// Resizability (and the resize geometry) is applied later in
+			// applyWindowSize. (Maximize/minimize for a borderless window are
+			// driven manually in the engine - AppKit only wires built-in zoom
+			// and Dock-miniaturization for titled windows, so initiating the
+			// style bits here is not what enables them.)
+			style = 0
+		}
 		win = win.Send(selector("initWithContentRect:styleMask:backing:defer:"),
 			cgRect{cgPoint{0, 0}, cgSize{defaultWidth, defaultHeight}},
-			uint(0), nsBackingStoreBuffered, false)
+			style, nsBackingStoreBuffered, false)
 		w.window = win.Send(selector("retain"))
 		w.windowDelegate = objc.ID(windowDelegateClass).Send(selector("new"))
 		registerEngine(w.windowDelegate, w)
@@ -811,7 +863,11 @@ func (w *webview) Show() {
 			if w.window.Send(selector("isMiniaturized")) != 0 {
 				w.window.Send(selector("deminiaturize:"), objc.ID(0))
 			}
-			w.minimized = false
+			if w.frameless {
+				// Frameless Minimize hides via orderOut and tracks minimized in
+				// the engine; Show is what brings it back and clears that state.
+				w.minimized = false
+			}
 			w.app.Send(selector("activateIgnoringOtherApps:"), true)
 			w.window.Send(selector("makeKeyAndOrderFront:"), objc.ID(0))
 		})
@@ -827,17 +883,29 @@ func (w *webview) Hide() {
 	})
 }
 
+// Maximize enlarges the window to fill the screen's visible area.
+//
+// Frame windows use the native zoom (performZoom:, which toggles). A
+// BORDERLESS (frameless) window cannot use AppKit's performZoom: - the zoom
+// machinery is only wired for titled windows - so maximization there is done
+// manually: the current window frame is remembered and the window is resized
+// to the visible frame of the screen it sat on. Toggling (already maximized)
+// restores that saved frame.
 func (w *webview) Maximize() {
 	if w.window == 0 {
 		return
 	}
 	performOnMain(func() {
 		autorelease(func() {
-			if w.maximized {
-				w.unmaximizeFrameless()
+			if w.frameless {
+				if w.maximized {
+					w.unmaximizeFrameless()
+					return
+				}
+				w.maximizeFrameless()
 				return
 			}
-			w.maximizeFrameless()
+			w.window.Send(selector("performZoom:"), objc.ID(0))
 		})
 	})
 }
@@ -878,24 +946,45 @@ func (w *webview) visibleFrame(frame cgRect) cgRect {
 	return objc.Send[cgRect](scr, selector("visibleFrame"))
 }
 
+// Unmaximize restores a maximized window to its normal size. Frameless windows
+// undo the manual zoom (see Maximize); framed windows are a no-op unless the
+// native zoom is active (performZoom: toggles back, we only call it when
+// isZoomed - there is no unzoom: selector).
 func (w *webview) Unmaximize() {
 	if w.window == 0 {
 		return
 	}
 	performOnMain(func() {
 		autorelease(func() {
-			w.unmaximizeFrameless()
+			if w.frameless {
+				w.unmaximizeFrameless()
+				return
+			}
+			if w.window.Send(selector("isZoomed")) != 0 {
+				w.window.Send(selector("performZoom:"), objc.ID(0))
+			}
 		})
 	})
 }
 
+// Maximized reports whether the window is currently maximized. A borderless
+// window cannot be zoomed by AppKit, so appkit's own zoom (maximizeFrameless)
+// is the authority there; a framed window zooms natively and reports it via
+// NSWindow -isZoomed. Safe to call from any goroutine (performOnMain marshals
+// to the UI thread).
 func (w *webview) Maximized() bool {
 	if w.window == 0 {
 		return false
 	}
 	max := false
 	performOnMain(func() {
-		autorelease(func() { max = w.maximized })
+		autorelease(func() {
+			if w.frameless {
+				max = w.maximized
+				return
+			}
+			max = w.window.Send(selector("isZoomed")) != 0
+		})
 	})
 	return max
 }
@@ -911,37 +1000,59 @@ func (w *webview) unmaximizeFrameless() {
 	w.maximized = false
 }
 
+// Minimize shrinks the window away. A framed window is miniaturized into the
+// Dock. A BORDERLESS (frameless) window cannot Dock-miniaturize (that too is
+// a titled-window feature), so minimize there is implemented as hiding the
+// window (orderOut:) - restore with Unminimize or Show (see View.Show).
 func (w *webview) Minimize() {
 	if w.window == 0 {
 		return
 	}
 	performOnMain(func() {
 		autorelease(func() {
-			if w.maximized {
-				w.unmaximizeFrameless()
+			if w.frameless {
+				if w.maximized {
+					w.unmaximizeFrameless()
+				}
+				w.window.Send(selector("orderOut:"), objc.ID(0))
+				w.minimized = true
+				return
 			}
-			w.window.Send(selector("orderOut:"), objc.ID(0))
-			w.minimized = true
+			w.window.Send(selector("performMiniaturize:"), objc.ID(0))
 		})
 	})
 }
 
+// restoreOnReopen brings this window back when the user clicks the app's Dock
+// icon while nothing of it is on screen (the "reopen" event, handled by the
+// AppkitAppDelegate's applicationShouldHandleReopen:hasVisibleWindows:). A
+// frameless Minimize hides the window via orderOut with no Dock-miniature, and
+// a framed Minimize docks it as a miniature, so this performs the same
+// recovery a tray's Show menu item would: un-minimize if needed, then re-show
+// and make the window key. It runs on the main thread (the AppKit delegate
+// calls it from there).
 func (w *webview) restoreOnReopen() {
 	if w.window == 0 {
 		return
 	}
 	autorelease(func() {
-		w.Show()
+		w.Show() // Show already un-minimizes (frameless + framed) and makes key
 	})
 }
 
+// Unminimize restores a minimized window. Frame windows deminiaturize; a
+// frameless window that Minimize hid is made visible and key again.
 func (w *webview) Unminimize() {
 	if w.window == 0 {
 		return
 	}
 	performOnMain(func() {
 		autorelease(func() {
-			w.unminimizeFrameless()
+			if w.frameless {
+				w.unminimizeFrameless()
+				return
+			}
+			w.window.Send(selector("deminiaturize:"), objc.ID(0))
 		})
 	})
 }
@@ -971,10 +1082,31 @@ func (w *webview) applyViewGeometry(v *View) {
 	w.isSizeSet = true
 }
 
+// applyWindowSize applies the creation-time size and State to an owned,
+// already-created window, mirroring the Linux applyWindowSize. On macOS the
+// window was created borderless/framed (continueWindowInit); applyWindowSize is
+// responsible for the pieces that depend on the final View fields: the style
+// mask (frameless keeps no title bar, and StateFixed removes the resizable bit
+// that would otherwise expose AppKit's native edge/corner resize), and the
+// content size or the matching min/max constraint for the state. It runs on the
+// UI thread.
 func (w *webview) applyWindowSize(width, height int, state State) {
-	var style uint
+	// Frameless (borderless) windows draw no title bar or OS buttons, but must
+	// stay natively resizable at their edge (the page chrome reports edges and
+	// corners). Maximize/minimize are handled MANUALLY by the engine (see
+	// Maximize/Minimize) because AppKit's performZoom:/performMiniaturize: are
+	// wired only for Titled windows. Frame windows get the ordinary decorated
+	// set, whose Miniaturizable bit is what lets a framed window Dock-miniaturize.
+	style := uint(nsWindowStyleMaskTitled | nsWindowStyleMaskClosable | nsWindowStyleMaskMiniaturizable)
 	if state != StateFixed {
 		style |= nsWindowStyleMaskResizable
+	}
+	if w.frameless {
+		// Borderless: no title bar or traffic-light buttons. Only Resizable
+		// (when not StateFixed) is wanted so native edge resize works.
+		// Miniaturizable/Closable are not needed because minimize and zoom are
+		// done in Go.
+		style &^= nsWindowStyleMaskTitled | nsWindowStyleMaskClosable | nsWindowStyleMaskMiniaturizable
 	}
 	w.window.Send(selector("setStyleMask:"), style)
 	size := cgSize{float64(width), float64(height)}
@@ -1218,7 +1350,7 @@ func (w *webview) onMessage(body string) {
 }
 
 func (w *webview) beginWindowMove(p dragRequest) {
-	if w.window == 0 {
+	if w.window == 0 || !w.frameless {
 		return
 	}
 	performOnMain(func() {

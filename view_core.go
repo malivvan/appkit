@@ -515,10 +515,23 @@ type View struct {
 	// Bind is this view's binding map; entries override App.Bind by name.
 	Bind map[string]any
 
+	// Frame creates the window with the OS frame - the title bar and system
+	// buttons - and an opaque background. The default (false) is a frameless
+	// window: no OS decoration of any kind and a fully transparent background,
+	// so the desktop shows through everywhere the page does not paint. The
+	// page is then the chrome and marks the movable pieces with the
+	// "-app-region" CSS attribute ("drag" / "no-drag"). Resizing still works
+	// from the window edges unless State is StateFixed.
+	//
+	// Only meaningful for windows appkit owns; an embedded window keeps its
+	// host's frame and background.
+	Frame bool
+
 	// Width and Height are the initial window size in logical pixels.
 	Width, Height int
 
-	// State controls whether the window can be resized.
+	// State controls whether the window can be resized: StateFixed makes the
+	// window non-resizable and disables the page-driven edge resize.
 	State State
 
 	w *webview

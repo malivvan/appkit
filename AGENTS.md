@@ -32,7 +32,8 @@ the contract: follow it unless a change explicitly and deliberately rewrites it.
    intact on every backend. SharedArrayBuffer availability depends on it.
 9. **Serve `App.FS` HTML with `html/template`** - never `text/template`. Pages
    interpolate `View` data and must stay auto-escaped.
-10. **Windows are always frameless** with full transparency; drag regions are CSS
+10. **Windows are frameless by default** (`View.Frame` opts into the OS frame and
+    an opaque background) with full transparency; drag regions are CSS
     (`-app-region`) tracked at runtime, not native chrome.
 11. **Respect per-platform threading.** The goroutine creating the first window is
     pinned to its OS thread; UI calls belong there. Background work re-enters via

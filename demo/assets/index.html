@@ -8,12 +8,13 @@
 </head>
 <body>
   <!--
-    Custom window chrome. appkit windows are always frameless, so the OS frame
-    is gone on every platform and this bar IS the chrome: drag it (via the
-    -app-region: drag attribute), minimize / maximize / close with the buttons
-    on the right. Because the frame is rendered by the page itself the window
-    looks (almost) identical on macOS, Windows and Linux - which is also what
-    makes this app a stable UI-automation target.
+    Custom window chrome. The window is created frameless (View.Frame false, the
+    default), so the OS frame is gone on every platform and this bar IS the
+    chrome: drag it (via the -app-region: drag attribute), minimize / maximize /
+    close with the buttons on the right. Because the frame is rendered by the
+    page itself the window looks (almost) identical on macOS, Windows and Linux -
+    which is also what makes this app a stable UI-automation target. Run with
+    -frame for the ordinary OS-framed window instead.
   -->
   <header id="titlebar">
     <span class="tb-brand">appkit! <span class="tb-brand-dim">demo</span></span>

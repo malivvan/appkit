@@ -212,6 +212,12 @@ type webview struct {
 	manager    uintptr
 	ownsWindow bool
 
+	// frameless windows drop the WM decorations via gtk_window_set_decorated;
+	// the page's -app-region boxes then drive the move drag
+	// (gtk_window_begin_move_drag on GTK3, gdk_toplevel_begin_move on GTK4) and
+	// the edge bands drive the matching begin_resize drag.
+	frameless bool
+
 	stopRunLoop   bool
 	isWindowShown bool
 	isSizeSet     bool
@@ -627,6 +633,7 @@ func newView(v *View, serve contentFunc) (*webview, error) {
 
 	w := &webview{
 		ownsWindow: true,
+		frameless:  !v.Frame,
 		bindings:   map[string]binding{},
 		serve:      serve,
 	}
@@ -648,7 +655,7 @@ func newView(v *View, serve contentFunc) (*webview, error) {
 	webkitSettingsSetEnableWriteConsoleToStdout(st, v.Debug)
 	webkitSettingsSetEnableDeveloperExtras(st, v.Debug)
 	w.applyTransparentBackground()
-	if w.ownsWindow {
+	if w.frameless && w.ownsWindow {
 		w.pushUserScript(buildRegionScript(v.State != StateFixed, false, "unix"))
 	}
 	if w.ownsWindow {
@@ -679,7 +686,11 @@ func (w *webview) initWindow(window uintptr) error {
 			return errors.New("webview: gtk_init_check failed (no display?)")
 		}
 		w.window = gtkNewWindow()
-		gtkWindowSetDecorated(w.window, false)
+		if w.frameless {
+			// Drop the WM decorations before the window is realized; the page
+			// provides the chrome and the drag/resize regions.
+			gtkWindowSetDecorated(w.window, false)
+		}
 		gSignalConnectData(w.window, "destroy", windowDestroyFn, w.id, 0, 0)
 	}
 
@@ -794,7 +805,16 @@ func (w *webview) registerSchemes() error {
 	return nil
 }
 
+// applyTransparentBackground makes the window background match View.Frame.
+// Framed windows are ordinary opaque OS windows and are left alone (WebKit's
+// default white background). Frameless windows are fully transparent by
+// default: the web view gets a fully transparent RGBA background, so the
+// page's transparent areas reveal the desktop (the page's html/body can set
+// its own background).
 func (w *webview) applyTransparentBackground() {
+	if !w.frameless {
+		return
+	}
 	rgba := [4]float64{0, 0, 0, 0}
 	if webkitWebViewSetBackgroundColor != nil && w.webview != 0 {
 		webkitWebViewSetBackgroundColor(w.webview, &rgba)
@@ -904,7 +924,12 @@ func (w *webview) applyWindowSize(width, height int, state State) {
 	}
 	w.isSizeSet = true
 	w.showWindow()
-	w.Eval(fmt.Sprintf("if(window.__webview__){window.__webview__.onAppRegionState({resizable:%v})}", state != StateFixed))
+	if w.frameless {
+		// Keep the tracker's resize-edge handling in sync with the actual
+		// resizability (no-op before the first page has loaded; the tracker's
+		// initial state came from View.State).
+		w.Eval(fmt.Sprintf("if(window.__webview__){window.__webview__.onAppRegionState({resizable:%v})}", state != StateFixed))
+	}
 }
 
 func (w *webview) applyInitialWindowSize(width, height int) {
@@ -945,7 +970,7 @@ func gdkButtonFor(domButton int32) int32 {
 }
 
 func (w *webview) beginWindowMove(p dragRequest) {
-	if w.window == 0 {
+	if w.window == 0 || !w.frameless {
 		return
 	}
 	button := gdkButtonFor(p.Button)
@@ -964,8 +989,11 @@ func (w *webview) beginWindowMoveGTK4(button int32, x, y float64, timestamp uint
 	gdkToplevelBeginMove(surface, w.pointerDevice(), button, x, y, timestamp)
 }
 
+// beginWindowResize starts an interactive edge resize (gtk_window_begin_resize_drag
+// on GTK3, gdk_toplevel_begin_resize on GTK4) for the hovered edge band
+// ("nw"/"n"/.../"w") of a resizable frameless window.
 func (w *webview) beginWindowResize(p dragRequest) {
-	if w.window == 0 {
+	if w.window == 0 || !w.frameless {
 		return
 	}
 	edge := gdkEdgeFor(p.Direction)
@@ -1210,7 +1238,7 @@ func (w *webview) showWindow() {
 }
 
 func (w *webview) announceFramelessCSD() {
-	if gtk4 || !w.ownsWindow || w.window == 0 {
+	if gtk4 || !w.frameless || !w.ownsWindow || w.window == 0 {
 		return
 	}
 	announceCSDOnce.Do(func() {

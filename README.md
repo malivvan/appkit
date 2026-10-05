@@ -163,7 +163,8 @@ creation. `View.Bind` overrides `App.Bind`; all calls return Promises.
 / `view.Emit` on the Go side, `window.events` on the page (rename via
 `App.Events`). Each event reaches every listener on both sides exactly once.
 
-**Always Frameless** Windows are always frameless and fully transparent -
+**Frameless by default** Windows are frameless and fully transparent unless
+`View.Frame` is true (which asks for the ordinary OS-framed, opaque window) -
 the page *is* the chrome. Mark movable regions with CSS (`-app-region: drag`;
 Electron's `-webkit-app-region` alias is accepted), tracked live through
 scrolling, resizing, and DOM changes. Double-clicking a drag region toggles
@@ -206,6 +207,7 @@ away; prefer it over `Raise`.
 
 ```bash
 go run ./demo             # showcase window (custom chrome, all features)
+go run ./demo -frame      # the same showcase with the OS window frame
 go run ./demo -http       # UI over loopback http://localhost (App.HTTP)
 go run ./demo -tray       # showcase + tray
 go run ./demo -selftest   # automated self test, exit 0/1
@@ -235,19 +237,6 @@ the JS-parsing check.
 - **WebView2 missing on Windows** - install the Evergreen runtime (the app
   returns a clear error rather than crashing).
 
-## Project layout
-
-```
-app_*.go    App: runtime, autostart, single-instance, loopback, app:// content, icon
-bind_*.go   Bindings: model + reflection, JS bridge builder, page-side events
-view_*.go   View/window API, CSS drag-region tracking, dialogs
-lib_*.go    Per-platform engine (WKWebView / WebKitGTK / WebView2 + Win32/COM)
-dialog/ notify/ tray/   Companion packages, each with its own demo
-demo/       Showcase app (also drives -selftest)
-```
-
-Root `*.go` files are prefixed `app_`, `lib_`, `bind_`, or `view_`; see
-[`AGENTS.md`](AGENTS.md) for the rules contributors (human or AI) must follow.
 
 ## License
 

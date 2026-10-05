@@ -893,7 +893,19 @@ func (w *webview) applyWebView2BackgroundColor() {
 		return
 	}
 	defer asController2(ctrl2).Release()
-	const color uint32 = 0
+	// COREWEBVIEW2_COLOR is a {A, R, G, B} byte struct passed by value; on the
+	// little-endian calling convention that is A in the low byte. A fully
+	// transparent background (alpha 0) with the WS_EX_NOREDIRECTIONBITMAP
+	// window style lets the desktop show through the page's transparent pixels;
+	// a fully opaque one (alpha 0xFF) paints the usual white behind the page. A
+	// framed window is opaque white; there is no per-window
+	// opaque-background option.
+	var color uint32
+	if w.frameless {
+		color = 0 // A=0 -> fully transparent
+	} else {
+		color = 0x000000FF // A=0xFF -> opaque white
+	}
 	hr = asController2(ctrl2).PutDefaultBackgroundColor(color)
 	dbg("applyDefaultBackgroundColor: color=0x%08x hr=0x%x", color, uint32(hr))
 }
@@ -1373,7 +1385,9 @@ const (
 	swMinimize   = 6
 	swRestore    = 9
 
+	wsOverlappedWindow      = 0x00CF0000
 	wsThickFrame            = 0x00040000
+	wsMaximizeBox           = 0x00010000
 	wsMinimizeBox           = 0x00020000
 	wsPopup                 = 0x80000000
 	wsExNoRedirectionBitmap = 0x00200000
@@ -1635,6 +1649,14 @@ type webview struct {
 	minWidth, minHeight int32
 	maxWidth, maxHeight int32
 
+	// frameless windows drop the OS frame; the page's -app-region
+	// boxes then drive the WM_NCHITTEST-based move drag, and the edge bands
+	// drive the matching WM_NCLBUTTONDOWN resize.
+	frameless bool
+
+	// fixed records that the window was created un-resizable (State ==
+	// StateFixed): a frameless fixed window drops WS_THICKFRAME so neither the
+	// OS nor the page edge bands can resize it.
 	fixed bool
 
 	regions appRegionSet
@@ -1671,7 +1693,8 @@ func newView(v *View, serve contentFunc) (*webview, error) {
 
 	w := &webview{
 		ownsWindow:  v.window == nil,
-		fixed:       v.State == StateFixed,
+		frameless:   !v.Frame,
+		fixed:       !v.Frame && v.State == StateFixed,
 		bindings:    map[string]binding{},
 		dispatchMap: map[uintptr]func(){},
 		serve:       serve,
@@ -1680,9 +1703,24 @@ func newView(v *View, serve contentFunc) (*webview, error) {
 	w.hinst = getModuleHandleW(0)
 
 	if w.ownsWindow {
-		style := uint32(wsPopup | wsMinimizeBox)
-		if !w.fixed {
-			style |= wsThickFrame
+		style := uint32(wsOverlappedWindow)
+		if w.frameless {
+			// A frameless window is a WS_POPUP (no OS caption/decorations).
+			// WS_MINIMIZEBOX is kept even though nothing draws it: the taskbar
+			// minimizes the foreground window with WM_SYSCOMMAND SC_MINIMIZE,
+			// which DefWindowProc only honours when this style is set - without
+			// it, clicking the taskbar button of a visible window does nothing
+			// (only the restore half of the taskbar toggle works).
+			// WS_THICKFRAME is still added when the window may be resized: it
+			// is what makes DefWindowProc honour the WM_NCLBUTTONDOWN(HTCAPTION
+			// / HT<edge>) that beginWindowMove/beginWindowResize send to start
+			// the modal move/resize loop, and it does not paint a visible frame
+			// on a borderless popup. StateFixed drops it so the window cannot
+			// be resized.
+			style = wsPopup | wsMinimizeBox
+			if !w.fixed {
+				style |= wsThickFrame
+			}
 		}
 		wc := wndClassExW{
 			lpfnWndProc:   wndProcCB,
@@ -1714,7 +1752,7 @@ func newView(v *View, serve contentFunc) (*webview, error) {
 		w.Destroy()
 		return nil, err
 	}
-	if w.ownsWindow {
+	if w.frameless && w.ownsWindow {
 		w.pushUserScript(buildRegionScript(v.State != StateFixed, true, "windows"))
 	}
 	if w.ownsWindow {
@@ -1775,7 +1813,13 @@ func (w *webview) engineMsg(hwnd uintptr, msg uint32, wp, lp uintptr) (uintptr, 
 		w.resizeWebView()
 		return 0, true
 	case wmNCCalcSize:
-		if w.ownsWindow && isZoomed(w.window) == 0 {
+		// Frameless windows carry WS_THICKFRAME only so DefWindowProc will run
+		// the modal resize (SC_SIZE) - the frame itself is not wanted. Return 0
+		// so the whole window rect is the client area (no invisible resize
+		// border / white inset the frame would otherwise keep), like the
+		// reference does. When maximized we leave the system to size the frame
+		// so the window still snaps inside the monitor work area.
+		if w.frameless && w.ownsWindow && isZoomed(w.window) == 0 {
 			return 0, true
 		}
 		return 0, false
@@ -1795,7 +1839,7 @@ func (w *webview) engineMsg(hwnd uintptr, msg uint32, wp, lp uintptr) (uintptr, 
 		}
 		return 0, true
 	case wmNCHitTest:
-		if !w.regions.empty() {
+		if w.frameless && !w.regions.empty() {
 			if pt, ok := w.clientPointAt(hwnd, lp); ok && w.regions.isDrag(float64(pt.X), float64(pt.Y)) {
 				return uintptr(int32(htCaption)), true
 			}
@@ -1884,6 +1928,18 @@ func (w *webview) applyWindowSize(width, height int, state State) {
 		w.maxWidth, w.maxHeight = int32(width), int32(height)
 		return
 	}
+	if !w.frameless {
+		// Frame windows toggle the resize frame and maximize box. Frameless
+		// windows resize from the page's edge bands instead (see
+		// beginWindowResize), so their style is left alone here.
+		style := getWindowLongPtrW(w.window, gwlStyle)
+		if state == StateFixed {
+			style &^= uintptr(wsThickFrame | wsMaximizeBox)
+		} else {
+			style |= uintptr(wsThickFrame | wsMaximizeBox)
+		}
+		setWindowLongPtrW(w.window, gwlStyle, style)
+	}
 	setWindowPos(w.window, 0, 0, 0, int32(width), int32(height),
 		swpNoZOrder|swpNoActivate|swpNoMove)
 	if w.ownsWindow {
@@ -1928,7 +1984,7 @@ func (w *webview) destroyWebViewOnUI() {
 func (w *webview) setRegions(rs appRegionSet) { w.regions = rs }
 
 func (w *webview) beginWindowMove(p dragRequest) {
-	if w.window == 0 || !w.ownsWindow {
+	if w.window == 0 || !w.frameless || !w.ownsWindow {
 		return
 	}
 	releaseCapture()
@@ -1958,7 +2014,7 @@ func hitTestCode(direction string) int {
 }
 
 func (w *webview) beginWindowResize(p dragRequest) {
-	if w.window == 0 || !w.ownsWindow {
+	if w.window == 0 || !w.frameless || !w.ownsWindow {
 		return
 	}
 	if getWindowLongPtrW(w.window, gwlStyle)&uintptr(wsThickFrame) == 0 {

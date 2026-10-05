@@ -483,8 +483,8 @@ async function runSelfTest() {
   await skip('dialog: native panels', 'modal panel - use the Dialogs section or dialog/demo');
   await skip('open / reveal', 'launches the desktop handler - use the Files section');
   await skip('tray Show / Hide', '--selftest runs without a tray host; use ./demo -tray');
-  await skip('window State (fixed/min/max)', 'creation-time View.State - not changeable at runtime');
-  await skip('run modes (-http)', 'launch-time flags, not page-testable');
+  await skip('window State (fixed/min/max)', 'creation-time View.State - use ./demo -frame');
+  await skip('run modes (-frame / -http)', 'launch-time flags, not page-testable');
   await skip('single instance', 'launch-time App.Exec / App.ID');
 
   const failed = results.filter((r) => !r.pass).length;

@@ -5,9 +5,10 @@
 // target cross-compiles from any host with CGO_ENABLED=0.
 //
 // An App is configuration plus a lazily-created runtime scope, like http.Server;
-// a View declares a window and is handed to App.Show. Windows are always
-// frameless and fully transparent - the page is the chrome - and app:// content
-// is served from App.FS as a secure, cross-origin-isolated origin.
+// a View declares a window and is handed to App.Show. Windows are frameless and
+// fully transparent by default - the page is the chrome - and View.Frame opts
+// into the ordinary OS-framed, opaque window. app:// content is served from
+// App.FS as a secure, cross-origin-isolated origin.
 package appkit
 
 import (
