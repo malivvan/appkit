@@ -49,6 +49,10 @@ jobs:
       - name: Run unit tests with the race detector
         run: go test -race -covermode atomic -coverprofile=covprofile ./...
 
+      - name: FreeBSD & NetBSD (Tier 2)
+        run: |
+          make cross-bsd
+          make lint-bsd
 
   unix:
     name: Test ${{ matrix.runner }}-${{ matrix.stack }}

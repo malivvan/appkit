@@ -1,4 +1,4 @@
-.PHONY: all build vet test test-short cover lint cross dist js-check check-imports fmt tidy demo clean
+.PHONY: all build vet test test-short cover lint lint-bsd cross cross-bsd dist js-check check-imports fmt tidy demo clean
 
 all: build vet test check-imports cross js-check
 
@@ -21,14 +21,20 @@ cover:
 lint:
 	golangci-lint run ./...
 
+lint-bsd:
+	CGO_ENABLED=0 GOOS=freebsd golangci-lint run ./...
+	CGO_ENABLED=0 GOOS=netbsd golangci-lint run ./...
 
-cross:
+cross: cross-bsd
 	GOOS=windows GOARCH=amd64 go build ./...
 	GOOS=windows GOARCH=arm64 go build ./...
 	GOOS=darwin GOARCH=amd64 go build ./...
 	GOOS=darwin GOARCH=arm64 go build ./...
 	GOOS=linux GOARCH=arm64 go build ./...
 
+cross-bsd:
+	CGO_ENABLED=0 GOOS=freebsd GOARCH=amd64 go build ./...
+	CGO_ENABLED=0 GOOS=netbsd GOARCH=amd64 go build ./...
 
 dist:
 	mkdir -p ./build && rm -f ./build/*
@@ -47,6 +53,10 @@ dist:
 	GOOS=linux   GOARCH=ppc64le     go build -trimpath -ldflags="-s -w -buildid=" -o ./build/appkit_linux_ppc64le ./demo/
 	GOOS=linux   GOARCH=riscv64     go build -trimpath -ldflags="-s -w -buildid=" -o ./build/appkit_linux_riscv64 ./demo/
 	GOOS=linux   GOARCH=s390x       go build -trimpath -ldflags="-s -w -buildid=" -o ./build/appkit_linux_s390x ./demo/
+	GOOS=freebsd GOARCH=amd64       go build -trimpath -ldflags="-s -w -buildid=" -o ./build/appkit_freebsd_amd64 ./demo/
+	GOOS=freebsd GOARCH=arm64       go build -trimpath -ldflags="-s -w -buildid=" -o ./build/appkit_freebsd_arm64 ./demo/
+	GOOS=netbsd  GOARCH=amd64       go build -trimpath -ldflags="-s -w -buildid=" -o ./build/appkit_netbsd_amd64 ./demo/
+	GOOS=netbsd  GOARCH=arm64       go build -trimpath -ldflags="-s -w -buildid=" -o ./build/appkit_netbsd_arm64 ./demo/
 
 js-check:
 	@command -v node >/dev/null 2>&1 || { echo "js-check: node is required (the injected JS is parsed and behavior-tested with it)"; exit 1; }
